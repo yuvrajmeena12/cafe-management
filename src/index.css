@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-cream text-sage-900 font-body;
+}
+
+.btn-primary {
+  @apply bg-saffron-500 hover:bg-saffron-600 text-white font-semibold px-5 py-2.5 rounded-lg transition-colors;
+}
+.btn-secondary {
+  @apply bg-white hover:bg-sage-50 text-sage-700 font-semibold px-5 py-2.5 rounded-lg border border-sage-100 transition-colors;
+}
+.card {
+  @apply bg-white rounded-xl shadow-sm border border-sage-100;
+}
