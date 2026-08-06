@@ -25,9 +25,10 @@ export default function Home() {
     // review and every paid order just to count them in the browser —
     // this is what keeps the homepage fast as order history grows.
     supabase.rpc('get_site_stats').single().then(({ data }) => {
-      if (data) {
-        setAvgRating(data.avg_rating)
-        setHappyCustomers(data.happy_customers)
+      const stats = data as { avg_rating: number | null; menu_item_count: number; happy_customers: number } | null
+      if (stats) {
+        setAvgRating(stats.avg_rating)
+        setHappyCustomers(stats.happy_customers)
       }
     })
   }, [])

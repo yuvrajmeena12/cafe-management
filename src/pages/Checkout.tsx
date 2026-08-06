@@ -294,7 +294,7 @@ export default function Checkout() {
         )}
         <div className="flex gap-2">
           <input value={discountCode} onChange={(e) => setDiscountCode(e.target.value)} placeholder="Or enter a code manually" className="flex-1 px-4 py-3 rounded-lg border border-sage-100" />
-          <button onClick={applyDiscount} className="btn-secondary">Apply</button>
+          <button onClick={() => applyDiscount()} className="btn-secondary">Apply</button>
         </div>
       </div>
 
