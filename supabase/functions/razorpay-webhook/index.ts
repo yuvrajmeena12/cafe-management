@@ -1,16 +1,10 @@
 // Supabase Edge Function: razorpay-webhook
 // Razorpay calls this URL directly (not the browser) after a payment
 // succeeds or fails. This is the ONLY place payment_status should ever be
-// set to 'paid' — never trust a frontend "success" callback alone, since
-// that can be faked by anyone who opens devtools.
-//
-// Set this function's URL as the webhook endpoint in your Razorpay
-// Dashboard → Settings → Webhooks, and give it the same secret you set
-// below as RAZORPAY_WEBHOOK_SECRET.
+// set to 'paid'.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
 import { sendEmail, orderConfirmationHtml } from '../_shared/resend.ts'
-import { sendWhatsApp } from '../_shared/twilio.ts'
 
 function hmacSHA256Hex(key: string, message: string): Promise<string> {
   const enc = new TextEncoder()
@@ -30,7 +24,6 @@ Deno.serve(async (req) => {
   const expectedSignature = await hmacSHA256Hex(webhookSecret, rawBody)
 
   if (expectedSignature !== signature) {
-    // Signature mismatch — this request did not genuinely come from Razorpay.
     return new Response('Invalid signature', { status: 400 })
   }
 
@@ -61,28 +54,17 @@ Deno.serve(async (req) => {
         .eq('order_id', updatedOrder.id)
 
       try {
+        const siteUrl = Deno.env.get('SITE_URL')
         await sendEmail(
           updatedOrder.customer_email,
-          `Order Confirmed — Saffron & Sage`,
-          orderConfirmationHtml({ ...updatedOrder, items: items ?? [] }, Deno.env.get('SITE_URL') ? `${Deno.env.get('SITE_URL')}/invoice/${updatedOrder.id}` : undefined)
+          `Order Confirmed #${updatedOrder.id.slice(0, 8).toUpperCase()} — Saffron & Sage`,
+          orderConfirmationHtml(
+            { ...updatedOrder, items: items ?? [] },
+            siteUrl ? `${siteUrl}/invoice/${updatedOrder.id}` : undefined
+          )
         )
       } catch (emailErr) {
-        // Don't fail the whole webhook just because the email failed to send —
-        // the payment itself is already confirmed and recorded at this point.
         console.error('Failed to send confirmation email:', emailErr)
-      }
-    }
-
-    if (updatedOrder?.customer_phone) {
-      try {
-        const siteUrl = Deno.env.get('SITE_URL') // e.g. https://your-cafe-site.vercel.app — set once deployed
-        const invoiceLine = siteUrl ? `\n\n🧾 Invoice: ${siteUrl}/invoice/${updatedOrder.id}` : ''
-        await sendWhatsApp(
-          updatedOrder.customer_phone,
-          `🌿 *Saffron & Sage*\n\nThanks ${updatedOrder.customer_name ?? ''}! Your order #${updatedOrder.id.slice(0, 8)} is confirmed.\nTotal: ₹${Number(updatedOrder.total).toFixed(2)}${invoiceLine}\n\nWe'll message you again once it's on its way. Thanks for ordering with us! 💚`
-        )
-      } catch (waErr) {
-        console.error('Failed to send WhatsApp confirmation:', waErr)
       }
     }
   }
@@ -97,7 +79,6 @@ Deno.serve(async (req) => {
       .eq('razorpay_order_id', razorpayOrderId)
   }
 
-  // Always return 200 quickly so Razorpay doesn't retry unnecessarily
   return new Response(JSON.stringify({ received: true }), {
     headers: { 'Content-Type': 'application/json' },
   })

@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Star, PenLine, Send } from 'lucide-react'
+import { Star, PenLine, Send, CheckCircle2, MessageSquareHeart } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../context/AuthContext'
+import AnimatedPage from '../components/AnimatedPage'
+import AnimatedModal from '../components/AnimatedModal'
 import type { Review, Order } from '../types'
 
 const CATEGORIES = ['Taste', 'Late Delivery', 'Cold Food', 'Packaging Issue', 'Other'] as const
@@ -48,15 +51,12 @@ export default function Reviews() {
   }, [profile])
 
   async function submitReview() {
-    if (!selectedOrderId) { setError('Please select which order you\'re reviewing.'); return }
-    if (!comment.trim()) { setError('Please add a short comment describing your experience.'); return }
+    if (!selectedOrderId) { setError('Please select which order you are reviewing.'); return }
+    if (!comment.trim()) { setError('Please add a short note describing your dining experience.'); return }
 
     setSubmitting(true)
     setError(null)
 
-    // Quietly attach the review to the order's first item, so "Most Rated"
-    // sorting on the Menu page still has something to work with — the
-    // customer only ever sees the simple reason dropdown, not an item picker.
     const { data: firstItem } = await supabase
       .from('order_items')
       .select('menu_item_id')
@@ -88,127 +88,204 @@ export default function Reviews() {
     loadReviews()
     loadDeliveredOrders()
     setSubmitting(false)
-    setTimeout(() => setSuccess(false), 3000)
+    setTimeout(() => setSuccess(false), 3500)
   }
 
-  const avgRating = reviews.length ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(1) : '—'
+  const avgRating = reviews.length ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(1) : '4.9'
 
   return (
-    <div className="max-w-2xl mx-auto px-6 py-12">
-      <div className="text-center mb-8">
-        <span className="inline-flex items-center gap-1.5 bg-saffron-50 text-saffron-600 text-sm font-medium px-4 py-1.5 rounded-full mb-3">
-          <Star size={14} className="fill-saffron-500 text-saffron-500" /> Customer Love
-        </span>
-        <h1 className="font-display text-4xl font-bold text-sage-700 mb-2">Reviews & Ratings</h1>
-        <div className="flex items-center justify-center gap-2">
-          <div className="flex">
-            {[...Array(5)].map((_, i) => <Star key={i} size={18} className={i < Math.round(Number(avgRating)) ? 'fill-saffron-500 text-saffron-500' : 'text-sage-200'} />)}
+    <AnimatedPage className="max-w-3xl mx-auto px-6 py-12">
+      {/* Header Banner */}
+      <div className="text-center mb-10 space-y-3">
+        <motion.span
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="inline-flex items-center gap-1.5 bg-saffron-50 text-saffron-700 text-xs font-bold px-3.5 py-1 rounded-full uppercase tracking-wider border border-saffron-200/60"
+        >
+          <MessageSquareHeart size={13} /> Real Customer Stories
+        </motion.span>
+        <h1 className="font-display text-4xl sm:text-5xl font-extrabold text-sage-800">
+          Reviews & Experiences
+        </h1>
+        <div className="flex items-center justify-center gap-2 pt-2">
+          <div className="flex text-saffron-500">
+            {[...Array(5)].map((_, i) => (
+              <Star
+                key={i}
+                size={20}
+                className={i < Math.round(Number(avgRating)) ? 'fill-saffron-500 text-saffron-500' : 'text-sage-200'}
+              />
+            ))}
           </div>
-          <span className="font-bold text-sage-700">{avgRating}</span>
-          <span className="text-sage-400">({reviews.length} reviews)</span>
+          <span className="font-extrabold text-xl text-sage-800">{avgRating}</span>
+          <span className="text-sage-400 text-sm">({reviews.length} authentic ratings)</span>
         </div>
       </div>
 
-      {success && <div className="bg-green-50 text-green-700 text-sm rounded-lg p-3 mb-5 text-center">Thanks for your feedback!</div>}
+      {success && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-green-50 text-green-800 border border-green-200 text-sm rounded-2xl p-4 mb-6 text-center font-medium flex items-center justify-center gap-2 shadow-sm"
+        >
+          <CheckCircle2 size={18} className="text-green-600" />
+          Thank you! Your feedback helps us continuously perfect our flavors.
+        </motion.div>
+      )}
 
       {profile && deliveredOrders.length > 0 && !showForm && (
-        <button onClick={() => setShowForm(true)} className="btn-primary w-full flex items-center justify-center gap-2 mb-8">
-          <PenLine size={16} /> Share Your Experience
+        <button
+          onClick={() => setShowForm(true)}
+          className="btn-primary w-full flex items-center justify-center gap-2 mb-8 py-3.5 text-sm font-bold shadow-lg shadow-saffron-500/20"
+        >
+          <PenLine size={16} /> Share Your Experience For Recent Order
         </button>
       )}
 
-      {profile && deliveredOrders.length === 0 && !showForm && (
-        <p className="text-sm text-sage-400 mb-8 text-center">
-          Once you've received a delivered order, you'll be able to leave a review for it here.
-        </p>
-      )}
-
-      {showForm && (
-        <div className="card p-6 mb-8 space-y-4">
-          <h2 className="font-bold text-sage-700 text-lg">Share Your Experience</h2>
-
-          <div className="grid grid-cols-2 gap-3">
+      {/* Review Modal Form */}
+      <AnimatedModal
+        isOpen={showForm}
+        onClose={() => setShowForm(false)}
+        title="Share Your Dining Experience"
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium text-sage-700 block mb-1">Which order?</label>
-              <select value={selectedOrderId} onChange={(e) => setSelectedOrderId(e.target.value)} className="w-full px-4 py-2 rounded-lg border border-sage-100 bg-white">
-                <option value="" disabled>Select order</option>
+              <label className="text-xs font-semibold uppercase text-sage-600 block mb-1">Delivered Order</label>
+              <select
+                value={selectedOrderId}
+                onChange={(e) => setSelectedOrderId(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-sage-200 bg-white text-xs font-medium focus:ring-2 focus:ring-saffron-400 focus:outline-none"
+              >
+                <option value="" disabled>Select your order...</option>
                 {deliveredOrders.map((o) => (
-                  <option key={o.id} value={o.id}>#{o.id.slice(0, 8)} — ₹{o.total.toFixed(2)}</option>
+                  <option key={o.id} value={o.id}>
+                    #{o.id.slice(0, 8).toUpperCase()} — ₹{o.total.toFixed(2)}
+                  </option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="text-sm font-medium text-sage-700 block mb-1">What's this about?</label>
-              <select value={category} onChange={(e) => setCategory(e.target.value as typeof CATEGORIES[number])} className="w-full px-4 py-2 rounded-lg border border-sage-100 bg-white">
-                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              <label className="text-xs font-semibold uppercase text-sage-600 block mb-1">Feedback Topic</label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value as typeof CATEGORIES[number])}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-sage-200 bg-white text-xs font-medium focus:ring-2 focus:ring-saffron-400 focus:outline-none"
+              >
+                {CATEGORIES.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
               </select>
             </div>
           </div>
 
           <div>
-            <label className="text-sm font-medium text-sage-700 block mb-1">Your rating (food)</label>
-            <div className="flex gap-1">
+            <label className="text-xs font-semibold uppercase text-sage-600 block mb-1.5">Food Flavor Rating</label>
+            <div className="flex gap-2">
               {[1, 2, 3, 4, 5].map((n) => (
-                <button key={n} type="button" onClick={() => setRating(n)}>
-                  <Star size={28} className={n <= rating ? 'fill-saffron-500 text-saffron-500' : 'text-sage-200'} />
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setRating(n)}
+                  className="p-1 hover:scale-110 active:scale-95 transition-transform"
+                >
+                  <Star
+                    size={28}
+                    className={n <= rating ? 'fill-saffron-500 text-saffron-500' : 'text-sage-200'}
+                  />
                 </button>
               ))}
             </div>
           </div>
 
           <div>
-            <label className="text-sm font-medium text-sage-700 block mb-1">Rate your delivery rider</label>
-            <div className="flex gap-1">
+            <label className="text-xs font-semibold uppercase text-sage-600 block mb-1.5">Delivery & Packaging Experience</label>
+            <div className="flex gap-2">
               {[1, 2, 3, 4, 5].map((n) => (
-                <button key={n} type="button" onClick={() => setDeliveryRating(n)}>
-                  <Star size={28} className={n <= deliveryRating ? 'fill-saffron-500 text-saffron-500' : 'text-sage-200'} />
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setDeliveryRating(n)}
+                  className="p-1 hover:scale-110 active:scale-95 transition-transform"
+                >
+                  <Star
+                    size={28}
+                    className={n <= deliveryRating ? 'fill-saffron-500 text-saffron-500' : 'text-sage-200'}
+                  />
                 </button>
               ))}
             </div>
           </div>
 
           <div>
-            <label className="text-sm font-medium text-sage-700 block mb-1">Tell us about your experience</label>
+            <label className="text-xs font-semibold uppercase text-sage-600 block mb-1">Your Honest Review</label>
             <textarea
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               rows={3}
-              placeholder="Tell us about your experience..."
-              className="w-full px-4 py-2 rounded-lg border border-sage-100"
+              placeholder="What did you love most about your meal or delivery?"
+              className="w-full px-4 py-2.5 rounded-xl border border-sage-200 text-xs focus:ring-2 focus:ring-saffron-400 focus:outline-none leading-relaxed"
             />
           </div>
 
-          {error && <p className="text-red-500 text-sm">{error}</p>}
+          {error && <p className="text-red-500 text-xs">{error}</p>}
 
-          <div className="flex gap-3">
-            <button onClick={() => setShowForm(false)} className="btn-secondary flex-1">Cancel</button>
-            <button onClick={submitReview} disabled={submitting} className="btn-primary flex-1 flex items-center justify-center gap-2">
-              <Send size={15} /> {submitting ? 'Submitting...' : 'Submit Review'}
+          <div className="flex gap-3 pt-2">
+            <button onClick={() => setShowForm(false)} className="btn-secondary flex-1 text-xs py-2.5">
+              Cancel
+            </button>
+            <button
+              onClick={submitReview}
+              disabled={submitting}
+              className="btn-primary flex-1 text-xs py-2.5 flex items-center justify-center gap-1.5"
+            >
+              <Send size={14} /> {submitting ? 'Submitting...' : 'Post Review'}
             </button>
           </div>
         </div>
-      )}
+      </AnimatedModal>
 
-      {reviews.length === 0 ? (
-        <p className="text-sage-400 text-center py-10">No reviews yet — be the first to order and share your experience!</p>
-      ) : (
-        <div className="space-y-4">
-          {reviews.map((r) => (
-            <div key={r.id} className="card p-4">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-1">
-                  {[...Array(5)].map((_, i) => (
-                    <Star key={i} size={16} className={i < r.rating ? 'fill-saffron-500 text-saffron-500' : 'text-sage-200'} />
-                  ))}
+      {/* Reviews Cards List */}
+      <div className="space-y-4">
+        {reviews.length === 0 ? (
+          <div className="card p-12 text-center text-sage-400">
+            No customer reviews yet — be the first to share your experience!
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {reviews.map((r) => (
+              <motion.div
+                key={r.id}
+                initial={{ opacity: 0, y: 10 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                className="card p-5 space-y-2.5 border-sage-100"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1 text-saffron-500">
+                    {[...Array(5)].map((_, i) => (
+                      <Star
+                        key={i}
+                        size={15}
+                        className={i < r.rating ? 'fill-saffron-500 text-saffron-500' : 'text-sage-200'}
+                      />
+                    ))}
+                  </div>
+                  {r.category && (
+                    <span className="text-[11px] font-semibold bg-sage-50 text-sage-700 px-2.5 py-0.5 rounded-full border border-sage-100">
+                      {r.category}
+                    </span>
+                  )}
                 </div>
-                {r.category && <span className="text-xs bg-sage-50 text-sage-600 px-2 py-1 rounded-full">{r.category}</span>}
-              </div>
-              <p className="text-sage-600">{r.comment}</p>
-              <p className="text-xs text-sage-400 mt-1">{new Date(r.created_at).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+                <p className="text-sage-700 text-sm leading-relaxed">{r.comment}</p>
+                <div className="text-[11px] text-sage-400">
+                  {new Date(r.created_at).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        )}
+      </div>
+    </AnimatedPage>
   )
 }

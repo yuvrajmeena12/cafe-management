@@ -2,16 +2,118 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  @apply bg-cream text-sage-900 font-body;
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  body {
+    @apply bg-cream text-sage-900 font-body antialiased;
+    overflow-x: hidden;
+  }
+
+  /* Custom subtle scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #f2f5f1;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #cbd5c5;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #a8bba1;
+  }
 }
 
+/* Animations & Keyframes */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(232, 135, 61, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 30px rgba(232, 135, 61, 0.6);
+  }
+}
+
+@keyframes gradientShift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(90deg, #f0f4ee 25%, #e2ebd9 50%, #f0f4ee 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s infinite;
+}
+
+.animate-float {
+  animation: float 4s ease-in-out infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 2.5s infinite;
+}
+
+.animate-gradient-shift {
+  background-size: 200% 200%;
+  animation: gradientShift 6s ease infinite;
+}
+
+/* Button & interactive components */
 .btn-primary {
-  @apply bg-saffron-500 hover:bg-saffron-600 text-white font-semibold px-5 py-2.5 rounded-lg transition-colors;
+  @apply relative overflow-hidden bg-gradient-to-r from-saffron-500 to-saffron-600 hover:from-saffron-600 hover:to-saffron-700 text-white font-semibold px-5 py-2.5 rounded-xl shadow-md hover:shadow-lg transition-all duration-300 transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none;
 }
+
 .btn-secondary {
-  @apply bg-white hover:bg-sage-50 text-sage-700 font-semibold px-5 py-2.5 rounded-lg border border-sage-100 transition-colors;
+  @apply bg-white/90 hover:bg-sage-50/90 text-sage-700 font-semibold px-5 py-2.5 rounded-xl border border-sage-200/80 shadow-sm hover:shadow-md transition-all duration-300 transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
 }
+
 .card {
-  @apply bg-white rounded-xl shadow-sm border border-sage-100;
+  @apply bg-white/95 backdrop-blur-sm rounded-2xl shadow-sm hover:shadow-md border border-sage-100/90 transition-all duration-300;
+}
+
+.glass-card {
+  @apply bg-white/80 backdrop-blur-md border border-white/40 shadow-lg rounded-2xl;
+}
+
+.glass-dark {
+  @apply bg-sage-900/80 backdrop-blur-md border border-white/10 shadow-xl rounded-2xl text-white;
+}
+
+.badge-glow {
+  @apply relative;
+}
+.badge-glow::after {
+  content: '';
+  @apply absolute inset-0 rounded-full blur-[4px] bg-inherit opacity-40 -z-10;
 }

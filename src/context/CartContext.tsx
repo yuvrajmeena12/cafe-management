@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, ReactNode, useMemo } from 'react'
+import { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react'
 import type { CartLine, MenuItem } from '../types'
 
 interface CartContextValue {
@@ -13,8 +13,25 @@ interface CartContextValue {
 
 const CartContext = createContext<CartContextValue | undefined>(undefined)
 
+const CART_STORAGE_KEY = 'cafe_cart_items_v1'
+
 export function CartProvider({ children }: { children: ReactNode }) {
-  const [lines, setLines] = useState<CartLine[]>([])
+  const [lines, setLines] = useState<CartLine[]>(() => {
+    try {
+      const saved = localStorage.getItem(CART_STORAGE_KEY)
+      return saved ? JSON.parse(saved) : []
+    } catch {
+      return []
+    }
+  })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(lines))
+    } catch {
+      // Ignore storage write error
+    }
+  }, [lines])
 
   function addItem(item: MenuItem) {
     setLines((prev) => {
@@ -41,6 +58,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
   function clearCart() {
     setLines([])
+    try {
+      localStorage.removeItem(CART_STORAGE_KEY)
+    } catch {}
   }
 
   const subtotal = useMemo(

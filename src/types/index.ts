@@ -5,7 +5,7 @@ export interface Profile {
   full_name: string | null
   phone: string | null
   role: UserRole
-  whatsapp_opt_in: boolean
+  email_notifications?: boolean
   vehicle_type: string | null
   vehicle_number: string | null
   vehicle_insurance_expiry: string | null
@@ -96,9 +96,14 @@ export interface StaffMember {
   role: string
   phone: string
   email: string
-  shift: string
+  shift: 'Morning' | 'Evening' | 'Night' | string
   monthly_salary: number
   active: boolean
+  checked_in?: boolean
+  last_check_in?: string | null
+  last_check_out?: string | null
+  performance_score?: number
+  attendance_days?: number
 }
 
 export interface Expense {

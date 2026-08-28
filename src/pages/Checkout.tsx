@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MapPin, User, Mail, Phone, Wallet, CreditCard } from 'lucide-react'
+import { MapPin, User, Mail, Phone, Wallet, CreditCard, Sparkles, CheckCircle2, ShieldCheck, ArrowRight } from 'lucide-react'
+import { motion } from 'framer-motion'
 import { useCart } from '../context/CartContext'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabaseClient'
@@ -8,6 +9,8 @@ import { openRazorpayCheckout } from '../lib/razorpay'
 import { isValidEmail, isValidPhone } from '../lib/validation'
 import { distanceKm, getDeliveryCharge } from '../lib/distance'
 import AddressMapPicker from '../components/AddressMapPicker'
+import AnimatedPage from '../components/AnimatedPage'
+import AnimatedCounter from '../components/AnimatedCounter'
 import type { OrderType, DeliveryChargeTier, Discount } from '../types'
 
 export default function Checkout() {
@@ -44,9 +47,6 @@ export default function Checkout() {
       .then(({ data }) => setAvailableOffers((data as Discount[]) ?? []))
   }, [])
 
-  // Prefill from the logged-in account once it loads — but only into
-  // fields the customer hasn't already typed something into themselves,
-  // so editing here always remains their choice.
   useEffect(() => {
     if (profile?.full_name) setCustomerName((prev) => prev || profile.full_name!)
     if (profile?.phone) setCustomerPhone((prev) => prev || profile.phone!)
@@ -62,7 +62,6 @@ export default function Checkout() {
     })
   }, [])
 
-  // Recalculate delivery charge automatically whenever the pinned address moves
   useEffect(() => {
     if (orderType !== 'delivery' || !addressLat || !addressLng || !cafeLocation) {
       setDeliveryCharge(0)
@@ -72,7 +71,7 @@ export default function Checkout() {
     setDeliveryCharge(getDeliveryCharge(km, tiers))
   }, [orderType, addressLat, addressLng, cafeLocation, tiers])
 
-  const tax = +(subtotal * 0.05).toFixed(2) // 5% GST placeholder — adjust to your actual rate
+  const tax = +(subtotal * 0.05).toFixed(2)
   const total = +(subtotal + tax + deliveryCharge - discountAmount).toFixed(2)
 
   async function applyDiscount(codeOverride?: string) {
@@ -86,11 +85,11 @@ export default function Checkout() {
       .single()
 
     if (!data) {
-      setError('Invalid or expired discount code.')
+      setError('Invalid or expired promotional code.')
       return
     }
     if (subtotal < data.min_order_value) {
-      setError(`Minimum order value for this code is ₹${data.min_order_value}.`)
+      setError(`Minimum order value for ${data.code} is ₹${data.min_order_value}.`)
       return
     }
     const amount = data.type === 'percent' ? (subtotal * data.value) / 100 : data.value
@@ -102,10 +101,10 @@ export default function Checkout() {
   function validateContactDetails(): string | null {
     if (!customerName.trim()) return 'Please enter your name.'
     if (!customerEmail.trim() || !isValidEmail(customerEmail)) {
-      return 'Please enter a valid email address (must include @) — this is where your order confirmation will be sent.'
+      return 'Please enter a valid email address — this is where your order receipt and invoice will be sent.'
     }
     if (!customerPhone.trim() || !isValidPhone(customerPhone)) {
-      return 'Please enter a valid contact phone number — our delivery team uses this to reach you.'
+      return 'Please enter a valid contact phone number for delivery coordination.'
     }
     if (orderType === 'delivery' && !address.trim()) return 'Please enter a delivery address.'
     return null
@@ -159,9 +158,11 @@ export default function Checkout() {
       }))
     )
 
-    // Cash on Delivery — no payment gateway needed, order goes straight to
-    // the kitchen. The delivery rider collects cash and marks it paid at
-    // the moment they mark the order delivered.
+    // Dispatch order confirmation email via edge function
+    supabase.functions.invoke('send-order-email', {
+      body: { orderId: order.id, isNewOrder: true },
+    }).catch(() => {})
+
     if (paymentMethod === 'cod') {
       clearCart()
       navigate(`/track?order=${order.id}`)
@@ -169,15 +170,12 @@ export default function Checkout() {
       return
     }
 
-    // Online payment — create a matching Razorpay order server-side (it
-    // re-reads the total from the database itself, so a tampered browser
-    // request can't create a cheaper payment).
     const { data: rzp, error: rzpError } = await supabase.functions.invoke('create-razorpay-order', {
       body: { orderId: order.id },
     })
 
     if (rzpError || !rzp?.razorpayOrderId) {
-      setError('Could not start payment. Please try again.')
+      setError('Could not initialize Razorpay payment. Please try again.')
       setPlacing(false)
       return
     }
@@ -194,7 +192,7 @@ export default function Checkout() {
         navigate(`/track?order=${order.id}`)
       },
       onFailure: (e) => {
-        setError(e.message || 'Payment was not completed.')
+        setError(e.message || 'Payment was cancelled.')
         setPlacing(false)
       },
     })
@@ -202,117 +200,248 @@ export default function Checkout() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-6 py-10">
-      <h1 className="font-display text-3xl font-bold text-sage-700 mb-6">Checkout</h1>
-
-      <div className="card p-5 mb-5 space-y-4">
-        <h2 className="font-semibold text-sage-700 flex items-center gap-2"><User size={18} /> Your Details</h2>
-        <div>
-          <label className="text-sm font-medium text-sage-700 block mb-1">Full Name</label>
-          <input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="e.g. Priya Sharma" className="w-full px-4 py-3 rounded-lg border border-sage-100" />
-        </div>
-        <div>
-          <label className="text-sm font-medium text-sage-700 block mb-1 flex items-center gap-1"><Mail size={14} /> Email Address</label>
-          <input type="email" value={customerEmail} onChange={(e) => setCustomerEmail(e.target.value)} placeholder="e.g. priya@example.com" className="w-full px-4 py-3 rounded-lg border border-sage-100" />
-          <p className="text-xs text-sage-400 mt-1">We'll send your order confirmation and receipt here.</p>
-        </div>
-        <div>
-          <label className="text-sm font-medium text-sage-700 block mb-1 flex items-center gap-1"><Phone size={14} /> Contact Phone Number</label>
-          <input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="e.g. +91 98765 43210" className="w-full px-4 py-3 rounded-lg border border-sage-100" />
-          <p className="text-xs text-sage-400 mt-1">Our delivery rider will call this number if they can't find you.</p>
-        </div>
+    <AnimatedPage className="max-w-3xl mx-auto px-6 py-12">
+      <div className="mb-8">
+        <h1 className="font-display text-3xl sm:text-4xl font-bold text-sage-800">Checkout</h1>
+        <p className="text-sage-500 text-sm mt-0.5">Complete your details for dispatch & kitchen preparation</p>
       </div>
 
-      <div className="card p-5 mb-5">
-        <h2 className="font-semibold text-sage-700 mb-3">Order Type</h2>
-        <div className="flex gap-2">
-          {(['dine_in', 'pickup', 'delivery'] as OrderType[]).map((t) => (
-            <button key={t} onClick={() => setOrderType(t)} className={`px-4 py-2 rounded-lg text-sm font-medium capitalize ${orderType === t ? 'bg-saffron-500 text-white' : 'bg-sage-50 text-sage-600'}`}>
-              {t.replace('_', ' ')}
-            </button>
-          ))}
-        </div>
-      </div>
+      <div className="space-y-5">
+        {/* Step 1: Customer Contact Info */}
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="card p-6 space-y-4"
+        >
+          <h2 className="font-bold text-sage-800 flex items-center gap-2 text-base">
+            <User size={18} className="text-saffron-500" /> Customer Information
+          </h2>
+          <div>
+            <label className="text-xs font-semibold uppercase text-sage-600 block mb-1">Full Name</label>
+            <input
+              value={customerName}
+              onChange={(e) => setCustomerName(e.target.value)}
+              placeholder="e.g. Priya Sharma"
+              className="w-full px-4 py-2.5 rounded-xl border border-sage-200 text-sm focus:ring-2 focus:ring-saffron-400 focus:outline-none"
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-semibold uppercase text-sage-600 block mb-1 flex items-center gap-1">
+                <Mail size={13} /> Email Address (For Receipt & Invoice)
+              </label>
+              <input
+                type="email"
+                value={customerEmail}
+                onChange={(e) => setCustomerEmail(e.target.value)}
+                placeholder="e.g. priya@example.com"
+                className="w-full px-4 py-2.5 rounded-xl border border-sage-200 text-sm focus:ring-2 focus:ring-saffron-400 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold uppercase text-sage-600 block mb-1 flex items-center gap-1">
+                <Phone size={13} /> Contact Phone Number
+              </label>
+              <input
+                value={customerPhone}
+                onChange={(e) => setCustomerPhone(e.target.value)}
+                placeholder="e.g. +91 98765 43210"
+                className="w-full px-4 py-2.5 rounded-xl border border-sage-200 text-sm focus:ring-2 focus:ring-saffron-400 focus:outline-none"
+              />
+            </div>
+          </div>
+        </motion.div>
 
-      {orderType === 'delivery' && (
-        <div className="card p-5 mb-5">
-          <h2 className="font-semibold text-sage-700 mb-3 flex items-center gap-2"><MapPin size={18} /> Delivery Address</h2>
-          <AddressMapPicker
-            address={address}
-            lat={addressLat}
-            lng={addressLng}
-            onChange={(addr, lat, lng) => { setAddress(addr); setAddressLat(lat); setAddressLng(lng) }}
-          />
-          {deliveryCharge > 0 && (
-            <p className="text-sm text-sage-600 mt-3 bg-sage-50 rounded-lg p-2">
-              📍 Delivery charge for this location: <strong>₹{deliveryCharge}</strong>
-            </p>
-          )}
-        </div>
-      )}
-
-      <div className="card p-5 mb-5">
-        <h2 className="font-semibold text-sage-700 mb-3">Payment Method</h2>
-        <div className="grid grid-cols-2 gap-3">
-          <button
-            onClick={() => setPaymentMethod('online')}
-            className={`flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-medium border-2 ${paymentMethod === 'online' ? 'border-saffron-500 bg-saffron-50 text-saffron-700' : 'border-sage-100 text-sage-600'}`}
-          >
-            <CreditCard size={16} /> Pay Now Online
-          </button>
-          <button
-            onClick={() => setPaymentMethod('cod')}
-            className={`flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-medium border-2 ${paymentMethod === 'cod' ? 'border-saffron-500 bg-saffron-50 text-saffron-700' : 'border-sage-100 text-sage-600'}`}
-          >
-            <Wallet size={16} /> Cash on Delivery
-          </button>
-        </div>
-      </div>
-
-      <div className="card p-5 mb-5">
-        <h2 className="font-semibold text-sage-700 mb-3">Discount Code</h2>
-        {availableOffers.length > 0 && (
-          <div className="mb-3 space-y-2">
-            <p className="text-xs text-sage-400">Available offers — tap to apply:</p>
-            {availableOffers.map((offer) => (
+        {/* Step 2: Order Type */}
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="card p-6"
+        >
+          <h2 className="font-bold text-sage-800 mb-3 text-base">Dining Preference</h2>
+          <div className="grid grid-cols-3 gap-2">
+            {(['delivery', 'dine_in', 'pickup'] as OrderType[]).map((t) => (
               <button
-                key={offer.id}
-                onClick={() => applyDiscount(offer.code)}
-                className="w-full flex justify-between items-center bg-sage-50 hover:bg-sage-100 rounded-lg px-4 py-2.5 text-left"
+                key={t}
+                onClick={() => setOrderType(t)}
+                className={`py-3 rounded-xl text-xs font-bold capitalize transition-all ${
+                  orderType === t
+                    ? 'bg-saffron-500 text-white shadow-md'
+                    : 'bg-sage-50 text-sage-700 hover:bg-sage-100'
+                }`}
               >
-                <div>
-                  <span className="font-bold text-sage-700">{offer.code}</span>
-                  <span className="text-sm text-sage-500 ml-2">
-                    {offer.type === 'percent' ? `${offer.value}% off` : `₹${offer.value} off`}
-                    {offer.min_order_value > 0 && ` on orders above ₹${offer.min_order_value}`}
-                  </span>
-                </div>
-                <span className="text-xs text-saffron-600">Apply →</span>
+                {t.replace('_', ' ')}
               </button>
             ))}
           </div>
+        </motion.div>
+
+        {/* Step 3: Address Pinning for Delivery */}
+        {orderType === 'delivery' && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="card p-6 space-y-3"
+          >
+            <h2 className="font-bold text-sage-800 flex items-center gap-2 text-base">
+              <MapPin size={18} className="text-saffron-500" /> Delivery Address Pin
+            </h2>
+            <AddressMapPicker
+              address={address}
+              lat={addressLat}
+              lng={addressLng}
+              onChange={(addr, lat, lng) => {
+                setAddress(addr)
+                setAddressLat(lat)
+                setAddressLng(lng)
+              }}
+            />
+            {deliveryCharge > 0 && (
+              <div className="bg-sage-50 border border-sage-200/80 rounded-xl p-3 text-xs text-sage-700 font-medium">
+                📍 Calculated delivery fee for this distance: <strong>₹{deliveryCharge}</strong>
+              </div>
+            )}
+          </motion.div>
         )}
-        <div className="flex gap-2">
-          <input value={discountCode} onChange={(e) => setDiscountCode(e.target.value)} placeholder="Or enter a code manually" className="flex-1 px-4 py-3 rounded-lg border border-sage-100" />
-          <button onClick={() => applyDiscount()} className="btn-secondary">Apply</button>
-        </div>
+
+        {/* Step 4: Payment Method */}
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="card p-6"
+        >
+          <h2 className="font-bold text-sage-800 mb-3 text-base">Payment Method</h2>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={() => setPaymentMethod('online')}
+              className={`flex items-center justify-center gap-2 py-3.5 rounded-xl text-xs font-bold border-2 transition-all ${
+                paymentMethod === 'online'
+                  ? 'border-saffron-500 bg-saffron-50/60 text-saffron-800 shadow-sm'
+                  : 'border-sage-100 text-sage-600 hover:bg-sage-50'
+              }`}
+            >
+              <CreditCard size={16} /> Pay Online (UPI / Cards / Netbanking)
+            </button>
+            <button
+              onClick={() => setPaymentMethod('cod')}
+              className={`flex items-center justify-center gap-2 py-3.5 rounded-xl text-xs font-bold border-2 transition-all ${
+                paymentMethod === 'cod'
+                  ? 'border-saffron-500 bg-saffron-50/60 text-saffron-800 shadow-sm'
+                  : 'border-sage-100 text-sage-600 hover:bg-sage-50'
+              }`}
+            >
+              <Wallet size={16} /> Cash on Delivery
+            </button>
+          </div>
+        </motion.div>
+
+        {/* Step 5: Coupons & Promo Codes */}
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.25 }}
+          className="card p-6 space-y-3"
+        >
+          <h2 className="font-bold text-sage-800 text-base">Have a Promo Code?</h2>
+          {availableOffers.length > 0 && (
+            <div className="space-y-2">
+              <span className="text-xs text-sage-400 font-medium">Available Offers:</span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {availableOffers.map((offer) => (
+                  <button
+                    key={offer.id}
+                    onClick={() => applyDiscount(offer.code)}
+                    className="flex justify-between items-center bg-sage-50 hover:bg-sage-100/80 rounded-xl p-3 text-left border border-sage-100 transition-colors"
+                  >
+                    <div>
+                      <span className="font-bold text-xs text-sage-800">{offer.code}</span>
+                      <span className="text-[11px] text-sage-500 block">
+                        {offer.type === 'percent' ? `${offer.value}% off` : `₹${offer.value} off`}
+                        {offer.min_order_value > 0 && ` on ₹${offer.min_order_value}+`}
+                      </span>
+                    </div>
+                    <span className="text-xs font-bold text-saffron-600">Apply →</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <input
+              value={discountCode}
+              onChange={(e) => setDiscountCode(e.target.value)}
+              placeholder="Or enter custom promo code..."
+              className="flex-1 px-4 py-2.5 rounded-xl border border-sage-200 text-xs font-medium focus:ring-2 focus:ring-saffron-400 focus:outline-none uppercase"
+            />
+            <button onClick={() => applyDiscount()} className="btn-secondary text-xs px-5">
+              Apply Code
+            </button>
+          </div>
+        </motion.div>
+
+        {/* Step 6: Order Total Breakdown */}
+        <motion.div
+          initial={{ opacity: 0, y: 15 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="card p-6 space-y-2.5 bg-gradient-to-br from-white to-sage-50/50 border-sage-200/80 shadow-lg"
+        >
+          <div className="flex justify-between text-xs text-sage-600">
+            <span>Items Subtotal</span>
+            <span className="font-semibold">₹{subtotal.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between text-xs text-sage-600">
+            <span>GST & Service (5%)</span>
+            <span className="font-semibold">₹{tax.toFixed(2)}</span>
+          </div>
+          {orderType === 'delivery' && (
+            <div className="flex justify-between text-xs text-sage-600">
+              <span>Delivery Charge</span>
+              <span className="font-semibold">₹{deliveryCharge.toFixed(2)}</span>
+            </div>
+          )}
+          {discountAmount > 0 && (
+            <div className="flex justify-between text-xs text-green-600 font-bold">
+              <span>Discount Applied</span>
+              <span>-₹{discountAmount.toFixed(2)}</span>
+            </div>
+          )}
+
+          <div className="flex justify-between items-center text-lg font-bold text-sage-800 border-t-2 border-sage-200/80 pt-3 mt-2">
+            <span>Grand Total</span>
+            <span className="text-2xl text-saffron-600">
+              <AnimatedCounter value={total} prefix="₹" decimals={2} />
+            </span>
+          </div>
+        </motion.div>
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-600 text-xs p-3.5 rounded-xl">
+            {error}
+          </div>
+        )}
+
+        <button
+          onClick={placeOrder}
+          disabled={placing}
+          className="btn-primary w-full py-4 text-base font-bold shadow-lg shadow-saffron-500/25 flex items-center justify-center gap-2"
+        >
+          {placing ? (
+            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <>
+              {paymentMethod === 'cod'
+                ? `Place Order — Pay ₹${total.toFixed(2)} on Delivery`
+                : `Pay ₹${total.toFixed(2)} & Place Order`}
+              <ArrowRight size={18} />
+            </>
+          )}
+        </button>
       </div>
-
-      <div className="card p-5 space-y-2">
-        <div className="flex justify-between text-sage-600"><span>Subtotal</span><span>₹{subtotal.toFixed(2)}</span></div>
-        <div className="flex justify-between text-sage-600"><span>Tax (5%)</span><span>₹{tax.toFixed(2)}</span></div>
-        {orderType === 'delivery' && <div className="flex justify-between text-sage-600"><span>Delivery Charge</span><span>₹{deliveryCharge.toFixed(2)}</span></div>}
-        {discountAmount > 0 && <div className="flex justify-between text-green-600"><span>Discount</span><span>-₹{discountAmount.toFixed(2)}</span></div>}
-        <div className="flex justify-between font-bold text-lg text-sage-700 border-t border-sage-100 pt-2">
-          <span>Total</span><span>₹{total.toFixed(2)}</span>
-        </div>
-      </div>
-
-      {error && <p className="text-red-500 text-sm mt-3">{error}</p>}
-
-      <button onClick={placeOrder} disabled={placing} className="btn-primary w-full mt-5">
-        {placing ? 'Placing order...' : paymentMethod === 'cod' ? `Place Order — Pay ₹${total.toFixed(2)} on Delivery` : `Pay ₹${total.toFixed(2)} & Place Order`}
-      </button>
-    </div>
+    </AnimatedPage>
   )
 }

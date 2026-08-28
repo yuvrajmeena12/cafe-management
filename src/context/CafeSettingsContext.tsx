@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { supabase } from '../lib/supabaseClient'
+import { getCache, setCache } from '../hooks/useCache'
 import type { CafeSettings } from '../types'
 
 interface CafeSettingsContextValue {
@@ -11,12 +12,16 @@ interface CafeSettingsContextValue {
 const CafeSettingsContext = createContext<CafeSettingsContextValue | undefined>(undefined)
 
 export function CafeSettingsProvider({ children }: { children: ReactNode }) {
-  const [settings, setSettings] = useState<Partial<CafeSettings>>({})
-  const [loading, setLoading] = useState(true)
+  const cachedSettings = getCache<Partial<CafeSettings>>('cafe_settings', 10 * 60 * 1000)
+  const [settings, setSettings] = useState<Partial<CafeSettings>>(cachedSettings ?? {})
+  const [loading, setLoading] = useState(!cachedSettings)
 
   function load() {
     supabase.from('cafe_settings').select('*').eq('id', 1).single().then(({ data }) => {
-      if (data) setSettings(data)
+      if (data) {
+        setSettings(data)
+        setCache('cafe_settings', data)
+      }
       setLoading(false)
     })
   }
