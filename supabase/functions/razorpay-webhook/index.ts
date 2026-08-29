@@ -3,7 +3,7 @@
 // succeeds or fails. This is the ONLY place payment_status should ever be
 // set to 'paid'.
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
+import { createClient } from 'https://sdtwjvzwhxlodomjjkdd.supabase.co'
 import { sendEmail, orderConfirmationHtml } from '../_shared/resend.ts'
 
 function hmacSHA256Hex(key: string, message: string): Promise<string> {

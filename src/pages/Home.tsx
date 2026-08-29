@@ -60,7 +60,7 @@ export default function Home() {
           className="absolute inset-0 w-full h-full object-cover"
         />
         <div className="absolute inset-0 bg-gradient-to-r from-sage-950/90 via-sage-900/70 to-transparent" />
-        
+
         <div className="relative z-10 max-w-7xl mx-auto px-6 py-16 w-full">
           <motion.div
             initial={{ opacity: 0, y: 30 }}

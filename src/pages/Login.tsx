@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Mail, Lock, User, Phone, CheckCircle, AlertCircle, ArrowRight, RefreshCw } from 'lucide-react'
+import { Mail, Lock, User, Phone, CheckCircle, AlertCircle, ArrowRight, RefreshCw, Loader2 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { isValidPhone, isValidEmail } from '../lib/validation'
 import { supabase } from '../lib/supabaseClient'
@@ -25,55 +25,70 @@ export default function Login() {
     setError(null)
     setLoading(true)
 
-    if (mode === 'forgot') {
-      if (!isValidEmail(email)) {
-        setError('Please enter a valid email address.')
-        setLoading(false)
-        return
-      }
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`,
-      })
-      setLoading(false)
-      if (resetError) setError(resetError.message)
-      else setResetSent(true)
-      return
-    }
-
-    if (mode === 'signup') {
-      if (!isValidPhone(phone)) {
-        setError('Please enter a valid phone number for delivery contact.')
-        setLoading(false)
-        return
-      }
-      if (!isValidEmail(email)) {
-        setError('Please enter a valid email address.')
-        setLoading(false)
-        return
-      }
-    }
-
-    if (mode === 'login') {
-      const result = await signIn(email, password)
-      setLoading(false)
-      if (result.error) {
-        setError(result.error)
-        if (result.needsVerification) {
-          setMode('verify_notice')
+    try {
+      if (mode === 'forgot') {
+        if (!isValidEmail(email)) {
+          setError('Please enter a valid email address.')
+          return
         }
-      } else {
-        navigate('/')
+        const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+          redirectTo: `${window.location.origin}/reset-password`,
+        })
+        if (resetError) setError(resetError.message)
+        else setResetSent(true)
+        return
       }
-    } else if (mode === 'signup') {
-      const result = await signUp(email, password, fullName, phone)
+
+      if (mode === 'signup') {
+        if (!isValidPhone(phone)) {
+          setError('Please enter a valid phone number for delivery contact.')
+          return
+        }
+        if (!isValidEmail(email)) {
+          setError('Please enter a valid email address.')
+          return
+        }
+        if (password.length < 6) {
+          setError('Password must be at least 6 characters.')
+          return
+        }
+
+        const result = await signUp(email.trim(), password, fullName.trim(), phone.trim())
+        if (result.error) {
+          setError(result.error)
+        } else if (result.needsVerification) {
+          setMode('verify_notice')
+        } else {
+          navigate('/')
+        }
+        return
+      }
+
+      if (mode === 'login') {
+        if (!isValidEmail(email)) {
+          setError('Please enter a valid email address.')
+          return
+        }
+        if (!password) {
+          setError('Please enter your password.')
+          return
+        }
+
+        const result = await signIn(email.trim(), password)
+        if (result.error) {
+          setError(result.error)
+          if (result.needsVerification) {
+            setMode('verify_notice')
+          }
+        } else {
+          navigate('/')
+        }
+      }
+    } catch (err: any) {
+      console.error('Submit exception:', err)
+      setError(err?.message || 'An unexpected error occurred. Please try again.')
+    } finally {
       setLoading(false)
-      if (result.error) {
-        setError(result.error)
-      } else if (result.needsVerification) {
-        setMode('verify_notice')
-      } else {
-        navigate('/')
-      }
     }
   }
 
@@ -90,11 +105,15 @@ export default function Login() {
 
   async function handleGoogleLogin() {
     setError(null)
-    const { error: oauthError } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: window.location.origin },
-    })
-    if (oauthError) setError(oauthError.message)
+    try {
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.origin },
+      })
+      if (oauthError) setError(oauthError.message)
+    } catch (err: any) {
+      setError(err?.message || 'Google sign-in failed.')
+    }
   }
 
   return (
@@ -110,14 +129,14 @@ export default function Login() {
         </motion.div>
         <h1 className="font-display text-3xl font-bold text-sage-800">
           {mode === 'login' && 'Welcome Back'}
-          {mode === 'signup' && 'Join Our Family'}
+          {mode === 'signup' && 'Create Account'}
           {mode === 'forgot' && 'Reset Password'}
           {mode === 'verify_notice' && 'Verify Your Email'}
         </h1>
         <p className="text-sage-500 text-sm mt-1">
-          {mode === 'login' && 'Log in to manage orders, access invoices, and save favorites.'}
-          {mode === 'signup' && 'Create your account for fast checkout and exclusive perks.'}
-          {mode === 'forgot' && "Enter your email and we'll send a secure password reset link."}
+          {mode === 'login' && 'Log in to track orders, manage favorites, and view invoices.'}
+          {mode === 'signup' && 'Sign up for fast checkout and exclusive offers.'}
+          {mode === 'forgot' && "Enter your email to receive a password reset link."}
           {mode === 'verify_notice' && "We've sent a verification link to your email address."}
         </p>
       </div>
@@ -136,7 +155,7 @@ export default function Login() {
             </div>
             <h3 className="font-bold text-xl text-sage-800">Check Your Inbox</h3>
             <p className="text-sm text-sage-600 leading-relaxed">
-              We sent a confirmation link to <strong className="text-sage-800">{email}</strong>. Please click the link to verify your account and log in.
+              We sent a verification email to <strong className="text-sage-800">{email}</strong>. Please click the confirmation link to activate your account.
             </p>
 
             <div className="pt-2">
@@ -170,9 +189,9 @@ export default function Login() {
             <div className="w-14 h-14 bg-green-50 rounded-2xl flex items-center justify-center text-green-500 mx-auto">
               <CheckCircle size={28} />
             </div>
-            <h3 className="font-bold text-xl text-sage-800">Reset Link Sent</h3>
+            <h3 className="font-bold text-xl text-sage-800">Reset Link Dispatched</h3>
             <p className="text-sm text-sage-600">
-              Check your email — we've sent instructions to <strong>{email}</strong>.
+              Check your email — we sent instructions to <strong>{email}</strong>.
             </p>
             <button
               onClick={() => { setMode('login'); setResetSent(false) }}
@@ -219,7 +238,7 @@ export default function Login() {
                       required
                     />
                   </div>
-                  <p className="text-xs text-sage-400 mt-1">Used exclusively for order and delivery contact.</p>
+                  <p className="text-xs text-sage-400 mt-1">Used exclusively for delivery contact.</p>
                 </div>
               </>
             )}
@@ -260,7 +279,7 @@ export default function Login() {
               <div className="flex justify-end">
                 <button
                   type="button"
-                  onClick={() => setMode('forgot')}
+                  onClick={() => { setMode('forgot'); setError(null) }}
                   className="text-xs font-semibold text-saffron-600 hover:text-saffron-700"
                 >
                   Forgot password?
@@ -272,7 +291,7 @@ export default function Login() {
               <motion.div
                 initial={{ opacity: 0, y: -5 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-red-50/90 border border-red-200 text-red-600 text-xs sm:text-sm p-3 rounded-xl flex items-start gap-2"
+                className="bg-red-50/90 border border-red-200 text-red-600 text-xs sm:text-sm p-3.5 rounded-xl flex items-start gap-2"
               >
                 <AlertCircle size={16} className="shrink-0 mt-0.5" />
                 <span>{error}</span>
@@ -285,7 +304,9 @@ export default function Login() {
               className="btn-primary w-full flex items-center justify-center gap-2 text-base font-semibold py-3"
             >
               {loading ? (
-                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <>
+                  <Loader2 size={18} className="animate-spin" /> Processing...
+                </>
               ) : (
                 <>
                   {mode === 'login' && 'Log In'}

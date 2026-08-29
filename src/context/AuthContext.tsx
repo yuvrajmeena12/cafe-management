@@ -23,96 +23,186 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isEmailVerified, setIsEmailVerified] = useState(false)
 
   async function loadProfile(userId: string, userEmail: string | undefined, emailConfirmedAt?: string | null) {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
-    setProfile(data as Profile | null)
-    setEmail(userEmail ?? null)
-    setIsEmailVerified(!!emailConfirmedAt)
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle()
+
+      if (data) {
+        setProfile(data as Profile)
+      } else {
+        // Fallback: create default profile row if it doesn't exist
+        const fallbackProfile: Profile = {
+          id: userId,
+          full_name: userEmail ? userEmail.split('@')[0] : 'Customer',
+          phone: null,
+          role: 'customer',
+          vehicle_type: null,
+          vehicle_number: null,
+          vehicle_insurance_expiry: null,
+        }
+        try {
+          await supabase.from('profiles').upsert(fallbackProfile)
+        } catch {}
+        setProfile(fallbackProfile)
+      }
+      setEmail(userEmail ?? null)
+      setIsEmailVerified(!!emailConfirmedAt)
+    } catch (err) {
+      console.error('Error loading profile:', err)
+      if (userEmail) {
+        setProfile({
+          id: userId,
+          full_name: userEmail.split('@')[0],
+          phone: null,
+          role: 'customer',
+          vehicle_type: null,
+          vehicle_number: null,
+          vehicle_insurance_expiry: null,
+        })
+        setEmail(userEmail)
+      }
+    }
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        loadProfile(session.user.id, session.user.email, session.user.email_confirmed_at)
-      }
-      setLoading(false)
-    })
+    let mounted = true
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        if (!mounted) return
+        if (session?.user) {
+          loadProfile(session.user.id, session.user.email, session.user.email_confirmed_at)
+        }
+        setLoading(false)
+      })
+      .catch((err) => {
+        console.error('Failed to get session:', err)
+        if (mounted) setLoading(false)
+      })
+
+    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!mounted) return
       if (session?.user) {
-        loadProfile(session.user.id, session.user.email, session.user.email_confirmed_at)
+        await loadProfile(session.user.id, session.user.email, session.user.email_confirmed_at)
       } else {
         setProfile(null)
         setEmail(null)
         setIsEmailVerified(false)
       }
+      setLoading(false)
     })
 
-    return () => listener.subscription.unsubscribe()
+    return () => {
+      mounted = false
+      listener.subscription.unsubscribe()
+    }
   }, [])
 
-  async function signIn(email: string, password: string) {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) {
-      if (error.message.toLowerCase().includes('email not confirmed')) {
-        return { error: 'Please verify your email before logging in. Check your inbox for the confirmation link.', needsVerification: true }
-      }
-      return { error: error.message }
-    }
-
-    if (data.user && !data.user.email_confirmed_at && data.session === null) {
-      return { error: 'Please verify your email before logging in.', needsVerification: true }
-    }
-
-    return { error: null }
-  }
-
-  async function signUp(email: string, password: string, fullName: string, phone: string) {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: `${window.location.origin}/login`,
-        data: {
-          full_name: fullName,
-          phone,
-        }
-      }
-    })
-
-    if (error) return { error: error.message }
-
-    if (data.user) {
-      await supabase.from('profiles').upsert({
-        id: data.user.id,
-        full_name: fullName,
-        phone,
-        role: 'customer',
+  async function signIn(emailInput: string, passwordInput: string) {
+    try {
+      const cleanEmail = emailInput.trim().toLowerCase()
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: passwordInput,
       })
 
-      // If Supabase requires email confirmation, session will be null or email_confirmed_at null
-      if (!data.session) {
-        return { error: null, needsVerification: true }
+      if (error) {
+        const msg = error.message || ''
+        if (msg.toLowerCase().includes('email not confirmed')) {
+          return {
+            error: 'Please verify your email address. We sent a confirmation link to your inbox.',
+            needsVerification: true,
+          }
+        }
+        if (msg.toLowerCase().includes('invalid login credentials')) {
+          return { error: 'Incorrect email or password. Please check and try again.' }
+        }
+        return { error: msg }
       }
+
+      if (data.session && data.user) {
+        await loadProfile(data.user.id, data.user.email, data.user.email_confirmed_at)
+      } else if (data.user && !data.user.email_confirmed_at) {
+        return {
+          error: 'Please verify your email address to continue.',
+          needsVerification: true,
+        }
+      }
+
+      return { error: null }
+    } catch (err: any) {
+      console.error('signIn exception:', err)
+      return { error: err?.message || 'Login request failed. Please check your internet connection and Supabase settings.' }
     }
-    return { error: null }
   }
 
-  async function resendVerificationEmail(email: string) {
-    const { error } = await supabase.auth.resend({
-      type: 'signup',
-      email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/login`,
+  async function signUp(emailInput: string, passwordInput: string, fullName: string, phone: string) {
+    try {
+      const cleanEmail = emailInput.trim().toLowerCase()
+      const { data, error } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password: passwordInput,
+        options: {
+          emailRedirectTo: `${window.location.origin}/login`,
+          data: {
+            full_name: fullName.trim(),
+            phone: phone.trim(),
+          },
+        },
+      })
+
+      if (error) return { error: error.message }
+
+      if (data.user) {
+        try {
+          await supabase.from('profiles').upsert({
+            id: data.user.id,
+            full_name: fullName.trim(),
+            phone: phone.trim(),
+            role: 'customer',
+          })
+        } catch {}
+
+        if (!data.session) {
+          return { error: null, needsVerification: true }
+        }
       }
-    })
-    return { error: error ? error.message : null }
+      return { error: null }
+    } catch (err: any) {
+      console.error('signUp exception:', err)
+      return { error: err?.message || 'Sign up request failed. Please try again.' }
+    }
+  }
+
+  async function resendVerificationEmail(emailInput: string) {
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: emailInput.trim().toLowerCase(),
+        options: {
+          emailRedirectTo: `${window.location.origin}/login`,
+        },
+      })
+      return { error: error ? error.message : null }
+    } catch (err: any) {
+      return { error: err?.message || 'Failed to resend confirmation email.' }
+    }
   }
 
   async function signOut() {
-    await supabase.auth.signOut()
-    setProfile(null)
-    setEmail(null)
-    setIsEmailVerified(false)
+    try {
+      await supabase.auth.signOut()
+    } catch (err) {
+      console.error('Sign out error:', err)
+    } finally {
+      setProfile(null)
+      setEmail(null)
+      setIsEmailVerified(false)
+    }
   }
 
   const isAdmin = profile?.role === 'admin'
@@ -128,7 +218,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signUp,
         resendVerificationEmail,
         signOut,
-        isAdmin
+        isAdmin,
       }}
     >
       {children}
