@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../../lib/supabaseClient'
-import { isValidEmail, isValidPhone } from '../../lib/validation'
+import { isValidEmail, isValidPhone, isValidName } from '../../lib/validation'
 import AnimatedModal from '../../components/AnimatedModal'
 import AnimatedCounter from '../../components/AnimatedCounter'
 import type { StaffMember } from '../../types'
@@ -59,11 +59,11 @@ export default function Staff() {
 
   function validate(): string[] {
     const errs: string[] = []
-    if (!editing?.name?.trim()) errs.push('Full name is required.')
+    if (!editing?.name?.trim() || !isValidName(editing.name)) errs.push('Full name is required (2–100 characters).')
     if (!editing?.role?.trim()) errs.push('Role assignment is required.')
     if (!editing?.email?.trim() || !isValidEmail(editing.email)) errs.push('Valid work email required.')
-    if (!editing?.phone?.trim() || !isValidPhone(editing.phone)) errs.push('Valid phone number required.')
-    if (editing?.monthly_salary == null || editing.monthly_salary <= 0) errs.push('Monthly salary must be greater than ₹0.')
+    if (!editing?.phone?.trim() || !isValidPhone(editing.phone)) errs.push('Valid phone number required (10–15 digits).')
+    if (editing?.monthly_salary == null || editing.monthly_salary < 0) errs.push('Monthly salary cannot be negative.')
     return errs
   }
 
@@ -357,6 +357,7 @@ export default function Staff() {
                 placeholder="e.g. Priya Sharma"
                 value={editing.name ?? ''}
                 onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                maxLength={100}
                 className="w-full px-4 py-2.5 rounded-xl border border-sage-200 text-sm focus:ring-2 focus:ring-saffron-400 focus:outline-none"
               />
             </div>

@@ -1,31 +1,102 @@
-import { useState } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Mail, Lock, User, Phone, CheckCircle, AlertCircle, ArrowRight, RefreshCw, Loader2 } from 'lucide-react'
+import {
+  Mail, Lock, User, Phone, CheckCircle, AlertCircle, ArrowRight,
+  RefreshCw, Loader2, Eye, EyeOff, ShieldCheck
+} from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
-import { isValidPhone, isValidEmail } from '../lib/validation'
+import {
+  isValidPhone, isValidEmail, isValidName, isValidPassword, getPasswordStrength, sanitizeErrorMessage,
+} from '../lib/validation'
 import { supabase } from '../lib/supabaseClient'
 import AnimatedPage from '../components/AnimatedPage'
+
+// ── Configurable submission cooldown (ms) ────────────────────
+const SUBMIT_COOLDOWN_MS = 2000
 
 export default function Login() {
   const { signIn, signUp, resendVerificationEmail } = useAuth()
   const navigate = useNavigate()
+
+  // ── Core state ─────────────────────────────────────────────
   const [mode, setMode] = useState<'login' | 'signup' | 'forgot' | 'verify_notice'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
   const [phone, setPhone] = useState('')
+
+  // ── Feedback state ─────────────────────────────────────────
   const [error, setError] = useState<string | null>(null)
   const [resetSent, setResetSent] = useState(false)
   const [loading, setLoading] = useState(false)
   const [resendStatus, setResendStatus] = useState<string | null>(null)
+  const [showPassword, setShowPassword] = useState(false)
 
+  // ── Inline field-level errors (shown onBlur) ───────────────
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+
+  // ── Rate-limit: submission cooldown ────────────────────────
+  const lastSubmitRef = useRef<number>(0)
+
+  // ── Password strength (signup only) ────────────────────────
+  const strength = mode === 'signup' ? getPasswordStrength(password) : null
+
+  // ── Field-level onBlur validation ──────────────────────────
+  const validateField = useCallback(
+    (field: string) => {
+      setFieldErrors((prev) => {
+        const next = { ...prev }
+        switch (field) {
+          case 'email':
+            if (email.trim() && !isValidEmail(email))
+              next.email = 'Please enter a valid email address.'
+            else delete next.email
+            break
+          case 'password':
+            if (mode === 'signup' && password) {
+              const { valid, errors } = isValidPassword(password)
+              if (!valid) next.password = errors.join(', ')
+              else delete next.password
+            } else if (mode === 'login' && password.length === 0) {
+              next.password = 'Password is required.'
+            } else {
+              delete next.password
+            }
+            break
+          case 'fullName':
+            if (fullName.trim() && !isValidName(fullName))
+              next.fullName = 'Name must be 2–100 characters.'
+            else delete next.fullName
+            break
+          case 'phone':
+            if (phone.trim() && !isValidPhone(phone))
+              next.phone = 'Enter a valid 10–15 digit phone number.'
+            else delete next.phone
+            break
+        }
+        return next
+      })
+    },
+    [email, password, fullName, phone, mode]
+  )
+
+  // ── Submission handler ─────────────────────────────────────
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
+
+    // Rate-limit: enforce cooldown
+    const now = Date.now()
+    if (now - lastSubmitRef.current < SUBMIT_COOLDOWN_MS) {
+      setError('Please wait a moment before trying again.')
+      return
+    }
+    lastSubmitRef.current = now
     setLoading(true)
 
     try {
+      // ── Forgot password ──────────────────────────────────
       if (mode === 'forgot') {
         if (!isValidEmail(email)) {
           setError('Please enter a valid email address.')
@@ -34,28 +105,34 @@ export default function Login() {
         const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
           redirectTo: `${window.location.origin}/reset-password`,
         })
-        if (resetError) setError(resetError.message)
+        if (resetError) setError(sanitizeErrorMessage(resetError.message))
         else setResetSent(true)
         return
       }
 
+      // ── Signup ───────────────────────────────────────────
       if (mode === 'signup') {
+        if (!isValidName(fullName)) {
+          setError('Please enter your full name (2–100 characters).')
+          return
+        }
         if (!isValidPhone(phone)) {
-          setError('Please enter a valid phone number for delivery contact.')
+          setError('Please enter a valid phone number (10–15 digits) for delivery contact.')
           return
         }
         if (!isValidEmail(email)) {
           setError('Please enter a valid email address.')
           return
         }
-        if (password.length < 6) {
-          setError('Password must be at least 6 characters.')
+        const pwCheck = isValidPassword(password)
+        if (!pwCheck.valid) {
+          setError(`Password requirements: ${pwCheck.errors.join(', ')}.`)
           return
         }
 
         const result = await signUp(email.trim(), password, fullName.trim(), phone.trim())
         if (result.error) {
-          setError(result.error)
+          setError(sanitizeErrorMessage(result.error))
         } else if (result.needsVerification) {
           setMode('verify_notice')
         } else {
@@ -64,6 +141,7 @@ export default function Login() {
         return
       }
 
+      // ── Login ────────────────────────────────────────────
       if (mode === 'login') {
         if (!isValidEmail(email)) {
           setError('Please enter a valid email address.')
@@ -76,7 +154,7 @@ export default function Login() {
 
         const result = await signIn(email.trim(), password)
         if (result.error) {
-          setError(result.error)
+          setError(sanitizeErrorMessage(result.error))
           if (result.needsVerification) {
             setMode('verify_notice')
           }
@@ -86,36 +164,51 @@ export default function Login() {
       }
     } catch (err: any) {
       console.error('Submit exception:', err)
-      setError(err?.message || 'An unexpected error occurred. Please try again.')
+      setError(sanitizeErrorMessage(err?.message, 'An unexpected error occurred. Please try again.'))
     } finally {
       setLoading(false)
     }
   }
 
+  // ── Resend verification email ──────────────────────────────
   async function handleResendEmail() {
     if (!email) return
-    setResendStatus('Sending verification link...')
+    setResendStatus('Sending verification link…')
     const res = await resendVerificationEmail(email)
     if (res.error) {
-      setResendStatus(`Failed: ${res.error}`)
+      setResendStatus(`Failed: ${sanitizeErrorMessage(res.error)}`)
     } else {
       setResendStatus('Verification email resent! Check your inbox.')
     }
   }
 
+  // ── Google OAuth ───────────────────────────────────────────
   async function handleGoogleLogin() {
+    if (loading) return
     setError(null)
     try {
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: { redirectTo: window.location.origin },
       })
-      if (oauthError) setError(oauthError.message)
+      if (oauthError) setError(sanitizeErrorMessage(oauthError.message))
     } catch (err: any) {
-      setError(err?.message || 'Google sign-in failed.')
+      setError(sanitizeErrorMessage(err?.message, 'Google sign-in failed.'))
     }
   }
 
+  // ── Helper: render inline error under a field ──────────────
+  function FieldError({ field }: { field: string }) {
+    const msg = fieldErrors[field]
+    if (!msg) return null
+    return (
+      <p className="text-red-500 text-xs mt-1 flex items-center gap-1" role="alert">
+        <AlertCircle size={12} className="shrink-0" /> {msg}
+      </p>
+    )
+  }
+
+  // ── Render ─────────────────────────────────────────────────
   return (
     <AnimatedPage className="max-w-md mx-auto px-6 py-16">
       <div className="text-center mb-8">
@@ -209,72 +302,139 @@ export default function Login() {
             transition={{ duration: 0.25 }}
             onSubmit={handleSubmit}
             className="card p-6 sm:p-8 space-y-4 shadow-xl"
+            noValidate
           >
+            {/* ── Signup-only fields ──────────────────────── */}
             {mode === 'signup' && (
               <>
                 <div>
-                  <label className="text-sm font-medium text-sage-700 block mb-1">Full Name</label>
+                  <label htmlFor="auth-fullname" className="text-sm font-medium text-sage-700 block mb-1">Full Name</label>
                   <div className="relative">
                     <User className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sage-400" size={16} />
                     <input
+                      id="auth-fullname"
                       value={fullName}
                       onChange={(e) => setFullName(e.target.value)}
+                      onBlur={() => validateField('fullName')}
                       placeholder="e.g. Priya Sharma"
-                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-sage-200/80 focus:ring-2 focus:ring-saffron-400 focus:outline-none transition-all"
+                      maxLength={100}
+                      autoComplete="name"
+                      aria-describedby={fieldErrors.fullName ? 'err-fullname' : undefined}
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl border transition-all focus:ring-2 focus:ring-saffron-400 focus:outline-none ${
+                        fieldErrors.fullName ? 'border-red-300 bg-red-50/30' : 'border-sage-200/80'
+                      }`}
                       required
                     />
                   </div>
+                  {fieldErrors.fullName && <p id="err-fullname" className="text-red-500 text-xs mt-1 flex items-center gap-1" role="alert"><AlertCircle size={12} className="shrink-0" /> {fieldErrors.fullName}</p>}
                 </div>
 
                 <div>
-                  <label className="text-sm font-medium text-sage-700 block mb-1">Phone Number</label>
+                  <label htmlFor="auth-phone" className="text-sm font-medium text-sage-700 block mb-1">Phone Number</label>
                   <div className="relative">
                     <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sage-400" size={16} />
                     <input
+                      id="auth-phone"
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
+                      onBlur={() => validateField('phone')}
                       placeholder="e.g. +91 98765 43210"
-                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-sage-200/80 focus:ring-2 focus:ring-saffron-400 focus:outline-none transition-all"
+                      maxLength={20}
+                      autoComplete="tel"
+                      aria-describedby={fieldErrors.phone ? 'err-phone' : undefined}
+                      className={`w-full pl-10 pr-4 py-3 rounded-xl border transition-all focus:ring-2 focus:ring-saffron-400 focus:outline-none ${
+                        fieldErrors.phone ? 'border-red-300 bg-red-50/30' : 'border-sage-200/80'
+                      }`}
                       required
                     />
                   </div>
+                  {fieldErrors.phone && <p id="err-phone" className="text-red-500 text-xs mt-1 flex items-center gap-1" role="alert"><AlertCircle size={12} className="shrink-0" /> {fieldErrors.phone}</p>}
                   <p className="text-xs text-sage-400 mt-1">Used exclusively for delivery contact.</p>
                 </div>
               </>
             )}
 
+            {/* ── Email ───────────────────────────────────── */}
             <div>
-              <label className="text-sm font-medium text-sage-700 block mb-1">Email Address</label>
+              <label htmlFor="auth-email" className="text-sm font-medium text-sage-700 block mb-1">Email Address</label>
               <div className="relative">
                 <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sage-400" size={16} />
                 <input
+                  id="auth-email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
+                  onBlur={() => validateField('email')}
                   placeholder="e.g. priya@example.com"
-                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-sage-200/80 focus:ring-2 focus:ring-saffron-400 focus:outline-none transition-all"
+                  maxLength={254}
+                  autoComplete="email"
+                  aria-describedby={fieldErrors.email ? 'err-email' : undefined}
+                  className={`w-full pl-10 pr-4 py-3 rounded-xl border transition-all focus:ring-2 focus:ring-saffron-400 focus:outline-none ${
+                    fieldErrors.email ? 'border-red-300 bg-red-50/30' : 'border-sage-200/80'
+                  }`}
                   required
                 />
               </div>
+              {fieldErrors.email && <p id="err-email" className="text-red-500 text-xs mt-1 flex items-center gap-1" role="alert"><AlertCircle size={12} className="shrink-0" /> {fieldErrors.email}</p>}
             </div>
 
+            {/* ── Password (login + signup) ────────────────── */}
             {mode !== 'forgot' && (
               <div>
-                <label className="text-sm font-medium text-sage-700 block mb-1">Password</label>
+                <label htmlFor="auth-password" className="text-sm font-medium text-sage-700 block mb-1">Password</label>
                 <div className="relative">
                   <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sage-400" size={16} />
                   <input
-                    type="password"
+                    id="auth-password"
+                    type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="At least 6 characters"
-                    className="w-full pl-10 pr-4 py-3 rounded-xl border border-sage-200/80 focus:ring-2 focus:ring-saffron-400 focus:outline-none transition-all"
+                    onBlur={() => validateField('password')}
+                    placeholder={mode === 'signup' ? 'Min 6 chars, upper, lower, number' : 'Your password'}
+                    maxLength={72}
+                    autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                    aria-describedby={fieldErrors.password ? 'err-password' : undefined}
+                    className={`w-full pl-10 pr-12 py-3 rounded-xl border transition-all focus:ring-2 focus:ring-saffron-400 focus:outline-none ${
+                      fieldErrors.password ? 'border-red-300 bg-red-50/30' : 'border-sage-200/80'
+                    }`}
                     required
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((s) => !s)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-sage-400 hover:text-sage-600 transition-colors p-0.5"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
+                {fieldErrors.password && <p id="err-password" className="text-red-500 text-xs mt-1 flex items-center gap-1" role="alert"><AlertCircle size={12} className="shrink-0" /> {fieldErrors.password}</p>}
+
+                {/* ── Password strength indicator (signup) ── */}
+                {mode === 'signup' && password.length > 0 && strength && (
+                  <div className="mt-2 space-y-1">
+                    <div className="flex gap-1">
+                      {[1, 2, 3, 4, 5].map((i) => (
+                        <div
+                          key={i}
+                          className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${
+                            i <= strength.score ? strength.color : 'bg-sage-100'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-sage-500 flex items-center gap-1">
+                        <ShieldCheck size={12} /> {strength.label}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
+            {/* ── Forgot password link (login mode) ───────── */}
             {mode === 'login' && (
               <div className="flex justify-end">
                 <button
@@ -287,17 +447,20 @@ export default function Login() {
               </div>
             )}
 
+            {/* ── Global error banner ─────────────────────── */}
             {error && (
               <motion.div
                 initial={{ opacity: 0, y: -5 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="bg-red-50/90 border border-red-200 text-red-600 text-xs sm:text-sm p-3.5 rounded-xl flex items-start gap-2"
+                role="alert"
               >
                 <AlertCircle size={16} className="shrink-0 mt-0.5" />
                 <span>{error}</span>
               </motion.div>
             )}
 
+            {/* ── Submit button ────────────────────────────── */}
             <button
               type="submit"
               disabled={loading}
@@ -305,7 +468,7 @@ export default function Login() {
             >
               {loading ? (
                 <>
-                  <Loader2 size={18} className="animate-spin" /> Processing...
+                  <Loader2 size={18} className="animate-spin" /> Processing…
                 </>
               ) : (
                 <>
@@ -317,6 +480,7 @@ export default function Login() {
               )}
             </button>
 
+            {/* ── Divider + Google OAuth ───────────────────── */}
             {mode !== 'forgot' && (
               <>
                 <div className="flex items-center gap-3 text-xs text-sage-400 py-1">
@@ -325,7 +489,8 @@ export default function Login() {
                 <button
                   type="button"
                   onClick={handleGoogleLogin}
-                  className="w-full flex items-center justify-center gap-2.5 border border-sage-200/90 rounded-xl py-2.5 text-sm font-medium text-sage-700 hover:bg-sage-50/80 transition-all shadow-sm active:scale-95"
+                  disabled={loading}
+                  className="w-full flex items-center justify-center gap-2.5 border border-sage-200/90 rounded-xl py-2.5 text-sm font-medium text-sage-700 hover:bg-sage-50/80 transition-all shadow-sm active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <svg width="18" height="18" viewBox="0 0 48 48">
                     <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l6-6C34.5 5.1 29.5 3 24 3 12.4 3 3 12.4 3 24s9.4 21 21 21 21-9.4 21-21c0-1.4-.1-2.7-.4-4z"/>
@@ -338,13 +503,14 @@ export default function Login() {
               </>
             )}
 
+            {/* ── Mode toggle links ───────────────────────── */}
             <div className="text-center pt-2 text-sm text-sage-600">
               {mode === 'login' ? (
                 <>
                   Don't have an account?{' '}
                   <button
                     type="button"
-                    onClick={() => { setMode('signup'); setError(null) }}
+                    onClick={() => { setMode('signup'); setError(null); setFieldErrors({}) }}
                     className="text-saffron-600 font-bold hover:underline"
                   >
                     Sign up
@@ -355,7 +521,7 @@ export default function Login() {
                   Already have an account?{' '}
                   <button
                     type="button"
-                    onClick={() => { setMode('login'); setError(null) }}
+                    onClick={() => { setMode('login'); setError(null); setFieldErrors({}) }}
                     className="text-saffron-600 font-bold hover:underline"
                   >
                     Log in
@@ -364,7 +530,7 @@ export default function Login() {
               ) : (
                 <button
                   type="button"
-                  onClick={() => { setMode('login'); setError(null) }}
+                  onClick={() => { setMode('login'); setError(null); setFieldErrors({}) }}
                   className="text-saffron-600 font-bold hover:underline"
                 >
                   Back to Login

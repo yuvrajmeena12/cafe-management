@@ -6,7 +6,7 @@ import { useCart } from '../context/CartContext'
 import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/supabaseClient'
 import { openRazorpayCheckout } from '../lib/razorpay'
-import { isValidEmail, isValidPhone } from '../lib/validation'
+import { isValidEmail, isValidPhone, isValidName, sanitizeErrorMessage } from '../lib/validation'
 import { distanceKm, getDeliveryCharge } from '../lib/distance'
 import AddressMapPicker from '../components/AddressMapPicker'
 import AnimatedPage from '../components/AnimatedPage'
@@ -17,6 +17,18 @@ export default function Checkout() {
   const { lines, subtotal, clearCart } = useCart()
   const { profile, email } = useAuth()
   const navigate = useNavigate()
+
+  // Guard: redirect if cart is empty
+  if (lines.length === 0) {
+    return (
+      <AnimatedPage className="max-w-3xl mx-auto px-6 py-12">
+        <div className="card p-12 text-center space-y-4">
+          <p className="text-sage-500 text-lg font-medium">Your cart is empty.</p>
+          <button onClick={() => navigate('/menu')} className="btn-primary">Browse Menu</button>
+        </div>
+      </AnimatedPage>
+    )
+  }
 
   const [customerName, setCustomerName] = useState('')
   const [customerEmail, setCustomerEmail] = useState('')
@@ -99,12 +111,12 @@ export default function Checkout() {
   }
 
   function validateContactDetails(): string | null {
-    if (!customerName.trim()) return 'Please enter your name.'
+    if (!customerName.trim() || !isValidName(customerName)) return 'Please enter your name (2–100 characters).'
     if (!customerEmail.trim() || !isValidEmail(customerEmail)) {
       return 'Please enter a valid email address — this is where your order receipt and invoice will be sent.'
     }
     if (!customerPhone.trim() || !isValidPhone(customerPhone)) {
-      return 'Please enter a valid contact phone number for delivery coordination.'
+      return 'Please enter a valid contact phone number (10–15 digits) for delivery coordination.'
     }
     if (orderType === 'delivery' && !address.trim()) return 'Please enter a delivery address.'
     return null
@@ -144,7 +156,7 @@ export default function Checkout() {
       .single()
 
     if (orderErr || !order) {
-      setError(orderErr?.message ?? 'Could not create order.')
+      setError(sanitizeErrorMessage(orderErr?.message, 'Could not create your order. Please try again.'))
       setPlacing(false)
       return
     }
@@ -175,7 +187,7 @@ export default function Checkout() {
     })
 
     if (rzpError || !rzp?.razorpayOrderId) {
-      setError('Could not initialize Razorpay payment. Please try again.')
+      setError(sanitizeErrorMessage(rzpError?.message, 'Could not initialize payment. Please try again.'))
       setPlacing(false)
       return
     }
@@ -222,6 +234,7 @@ export default function Checkout() {
               value={customerName}
               onChange={(e) => setCustomerName(e.target.value)}
               placeholder="e.g. Priya Sharma"
+              maxLength={100}
               className="w-full px-4 py-2.5 rounded-xl border border-sage-200 text-sm focus:ring-2 focus:ring-saffron-400 focus:outline-none"
             />
           </div>
@@ -235,6 +248,7 @@ export default function Checkout() {
                 value={customerEmail}
                 onChange={(e) => setCustomerEmail(e.target.value)}
                 placeholder="e.g. priya@example.com"
+                maxLength={254}
                 className="w-full px-4 py-2.5 rounded-xl border border-sage-200 text-sm focus:ring-2 focus:ring-saffron-400 focus:outline-none"
               />
             </div>
@@ -246,6 +260,7 @@ export default function Checkout() {
                 value={customerPhone}
                 onChange={(e) => setCustomerPhone(e.target.value)}
                 placeholder="e.g. +91 98765 43210"
+                maxLength={20}
                 className="w-full px-4 py-2.5 rounded-xl border border-sage-200 text-sm focus:ring-2 focus:ring-saffron-400 focus:outline-none"
               />
             </div>

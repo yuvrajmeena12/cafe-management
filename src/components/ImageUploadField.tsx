@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { Upload, Link as LinkIcon, Loader2 } from 'lucide-react'
 import { uploadImage } from '../lib/upload'
+import { isValidUrl } from '../lib/validation'
 
 interface Props {
   label: string
@@ -18,7 +19,12 @@ export default function ImageUploadField({ label, value, onChange, folder }: Pro
   async function handleFile(file: File | undefined) {
     if (!file) return
     if (!file.type.startsWith('image/')) {
-      setError('Please choose an image file (JPG, PNG, WEBP).')
+      setError('Please choose an image file (JPG, PNG, GIF, WEBP).')
+      return
+    }
+    const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml']
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      setError(`File type "${file.type}" is not supported. Use JPG, PNG, GIF, or WEBP.`)
       return
     }
     if (file.size > 5 * 1024 * 1024) {
@@ -83,7 +89,15 @@ export default function ImageUploadField({ label, value, onChange, folder }: Pro
       ) : (
         <input
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => {
+            const url = e.target.value
+            if (url && !isValidUrl(url)) {
+              setError('Please enter a valid URL starting with https://')
+            } else {
+              setError(null)
+            }
+            onChange(url)
+          }}
           placeholder="https://example.com/photo.jpg"
           className="w-full px-4 py-2 rounded-lg border border-sage-100"
         />

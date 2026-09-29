@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Type, Phone, Share2, MapPin, Mail, Loader2, CheckCircle, Sparkles } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
-import { isValidEmail, isValidPhone } from '../../lib/validation'
+import { isValidEmail, isValidPhone, isValidUrl, sanitizeErrorMessage } from '../../lib/validation'
 import ImageUploadField from '../../components/ImageUploadField'
 import AddressMapPicker from '../../components/AddressMapPicker'
 import type { CafeSettings } from '../../types'
@@ -27,6 +27,13 @@ export default function Settings() {
     if (!settings.cafe_name?.trim()) errs.push('Cafe name is required.')
     if (settings.email && !isValidEmail(settings.email)) errs.push('Contact email must include @ and a domain.')
     if (settings.phone && !isValidPhone(settings.phone)) errs.push('Contact phone number looks invalid.')
+    const socialFields: (keyof CafeSettings)[] = ['facebook_url', 'instagram_url', 'twitter_url']
+    for (const field of socialFields) {
+      const val = settings[field]
+      if (val && typeof val === 'string' && val.trim() && !isValidUrl(val)) {
+        errs.push(`${field.replace('_url', '').replace('_', ' ')} URL is not a valid web address.`)
+      }
+    }
     return errs
   }
 
@@ -55,7 +62,7 @@ export default function Settings() {
     })
     setTesting(false)
     if (error || data?.error) {
-      setTestStatus(`Failed: ${data?.error ?? error?.message ?? 'Unknown error'} — verify your RESEND_API_KEY secret in Supabase.`)
+      setTestStatus(`Failed: ${sanitizeErrorMessage(data?.error ?? error?.message, 'Unknown error')} — verify your RESEND_API_KEY secret in Supabase.`)
       return
     }
     setTestStatus('Test email dispatched! Check the inbox and spam folder.')

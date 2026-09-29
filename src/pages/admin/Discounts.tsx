@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Plus, Pencil, Trash2, Tag, Mail, Loader2, Sparkles } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../../lib/supabaseClient'
+import { sanitizeErrorMessage } from '../../lib/validation'
 import AnimatedModal from '../../components/AnimatedModal'
 import type { Discount } from '../../types'
 
@@ -29,7 +30,20 @@ export default function Discounts() {
 
   async function save() {
     if (!editing) return
-    const payload = { ...editing, code: editing.code?.toUpperCase().trim() }
+    const code = editing.code?.toUpperCase().trim() ?? ''
+    if (!code || code.length < 2 || code.length > 20) {
+      alert('Discount code must be 2–20 characters.')
+      return
+    }
+    if (!editing.value || editing.value <= 0) {
+      alert('Discount value must be greater than 0.')
+      return
+    }
+    if (editing.type === 'percent' && editing.value > 100) {
+      alert('Percentage discount cannot exceed 100%.')
+      return
+    }
+    const payload = { ...editing, code }
     if (editing.id) await supabase.from('discounts').update(payload).eq('id', editing.id)
     else await supabase.from('discounts').insert(payload)
     setEditing(null)
@@ -58,7 +72,7 @@ export default function Discounts() {
     if (error || data?.error) {
       setBroadcastResult({
         id: d.id,
-        message: `Failed: ${data?.error ?? error?.message ?? 'Could not dispatch emails'}`,
+        message: `Failed: ${sanitizeErrorMessage(data?.error ?? error?.message, 'Could not dispatch emails')}`,
         success: false,
       })
       return
@@ -185,6 +199,7 @@ export default function Discounts() {
                 placeholder="e.g. MONSOON25"
                 value={editing.code ?? ''}
                 onChange={(e) => setEditing({ ...editing, code: e.target.value })}
+                maxLength={20}
                 className="w-full px-4 py-2.5 rounded-xl border border-sage-200 uppercase font-bold text-sage-800 focus:ring-2 focus:ring-saffron-400 focus:outline-none"
               />
             </div>

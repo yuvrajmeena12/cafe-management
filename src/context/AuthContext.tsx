@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { supabase } from '../lib/supabaseClient'
+import { sanitizeErrorMessage } from '../lib/validation'
 import type { Profile } from '../types'
 
 interface AuthContextValue {
@@ -45,7 +46,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         try {
           await supabase.from('profiles').upsert(fallbackProfile)
-        } catch {}
+        } catch (upsertErr) {
+          console.warn('AuthContext: fallback profile upsert failed —', upsertErr)
+        }
         setProfile(fallbackProfile)
       }
       setEmail(userEmail ?? null)
@@ -121,7 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (msg.toLowerCase().includes('invalid login credentials')) {
           return { error: 'Incorrect email or password. Please check and try again.' }
         }
-        return { error: msg }
+        return { error: sanitizeErrorMessage(msg, 'Login failed. Please try again.') }
       }
 
       if (data.session && data.user) {
@@ -136,7 +139,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { error: null }
     } catch (err: any) {
       console.error('signIn exception:', err)
-      return { error: err?.message || 'Login request failed. Please check your internet connection and Supabase settings.' }
+      return { error: sanitizeErrorMessage(err?.message, 'Login request failed. Please check your internet connection.') }
     }
   }
 
@@ -155,7 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
       })
 
-      if (error) return { error: error.message }
+      if (error) return { error: sanitizeErrorMessage(error.message) }
 
       if (data.user) {
         try {
@@ -165,7 +168,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             phone: phone.trim(),
             role: 'customer',
           })
-        } catch {}
+        } catch (upsertErr) {
+          console.warn('AuthContext: signup profile upsert failed —', upsertErr)
+        }
 
         if (!data.session) {
           return { error: null, needsVerification: true }
@@ -174,7 +179,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { error: null }
     } catch (err: any) {
       console.error('signUp exception:', err)
-      return { error: err?.message || 'Sign up request failed. Please try again.' }
+      return { error: sanitizeErrorMessage(err?.message, 'Sign up request failed. Please try again.') }
     }
   }
 

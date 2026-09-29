@@ -3,6 +3,7 @@ import { Star, PenLine, Send, CheckCircle2, MessageSquareHeart } from 'lucide-re
 import { motion, AnimatePresence } from 'framer-motion'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../context/AuthContext'
+import { sanitizeErrorMessage } from '../lib/validation'
 import AnimatedPage from '../components/AnimatedPage'
 import AnimatedModal from '../components/AnimatedModal'
 import type { Review, Order } from '../types'
@@ -12,21 +13,32 @@ const CATEGORIES = ['Taste', 'Late Delivery', 'Cold Food', 'Packaging Issue', 'O
 export default function Reviews() {
   const { profile } = useAuth()
   const [reviews, setReviews] = useState<Review[]>([])
+  const [reviewsPage, setReviewsPage] = useState(0)
+  const [hasMoreReviews, setHasMoreReviews] = useState(true)
   const [deliveredOrders, setDeliveredOrders] = useState<Order[]>([])
   const [showForm, setShowForm] = useState(false)
 
-  const [selectedOrderId, setSelectedOrderId] = useState('')
-  const [rating, setRating] = useState(5)
-  const [deliveryRating, setDeliveryRating] = useState(5)
-  const [category, setCategory] = useState<typeof CATEGORIES[number]>('Taste')
-  const [comment, setComment] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState(false)
+  const REVIEWS_PER_PAGE = 20
 
-  async function loadReviews() {
-    const { data } = await supabase.from('reviews').select('*').order('created_at', { ascending: false })
-    setReviews((data as Review[]) ?? [])
+  async function loadReviews(reset = false) {
+    const page = reset ? 0 : reviewsPage
+    const from = page * REVIEWS_PER_PAGE
+    const to = from + REVIEWS_PER_PAGE - 1
+
+    const { data } = await supabase
+      .from('reviews')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(from, to)
+
+    const fetched = (data as Review[]) ?? []
+    if (reset) {
+      setReviews(fetched)
+    } else {
+      setReviews((prev) => [...prev, ...fetched])
+    }
+    setHasMoreReviews(fetched.length === REVIEWS_PER_PAGE)
+    setReviewsPage(page + 1)
   }
 
   async function loadDeliveredOrders() {
@@ -44,8 +56,17 @@ export default function Reviews() {
     setDeliveredOrders(((orders as Order[]) ?? []).filter((o) => !reviewedIds.has(o.id)))
   }
 
+  const [selectedOrderId, setSelectedOrderId] = useState('')
+  const [rating, setRating] = useState(5)
+  const [deliveryRating, setDeliveryRating] = useState(5)
+  const [category, setCategory] = useState<typeof CATEGORIES[number]>('Taste')
+  const [comment, setComment] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState(false)
+
   useEffect(() => {
-    loadReviews()
+    loadReviews(true)
     loadDeliveredOrders()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile])
@@ -74,7 +95,7 @@ export default function Reviews() {
     })
 
     if (insertError) {
-      setError('Could not submit your review. Please try again.')
+      setError(sanitizeErrorMessage(insertError.message, 'Could not submit your review. Please try again.'))
       setSubmitting(false)
       return
     }
@@ -85,7 +106,7 @@ export default function Reviews() {
     setShowForm(false)
     setComment('')
     setSelectedOrderId('')
-    loadReviews()
+    loadReviews(true)
     loadDeliveredOrders()
     setSubmitting(false)
     setTimeout(() => setSuccess(false), 3500)
@@ -223,9 +244,11 @@ export default function Reviews() {
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               rows={3}
+              maxLength={1000}
               placeholder="What did you love most about your meal or delivery?"
               className="w-full px-4 py-2.5 rounded-xl border border-sage-200 text-xs focus:ring-2 focus:ring-saffron-400 focus:outline-none leading-relaxed"
             />
+            <p className="text-xs text-sage-400 mt-0.5 text-right">{comment.length}/1000</p>
           </div>
 
           {error && <p className="text-red-500 text-xs">{error}</p>}
@@ -284,6 +307,15 @@ export default function Reviews() {
               </motion.div>
             ))}
           </div>
+        )}
+
+        {hasMoreReviews && reviews.length >= REVIEWS_PER_PAGE && (
+          <button
+            onClick={() => loadReviews()}
+            className="btn-secondary w-full py-3 text-sm font-semibold"
+          >
+            Load More Reviews
+          </button>
         )}
       </div>
     </AnimatedPage>

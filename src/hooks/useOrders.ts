@@ -13,6 +13,7 @@ export function useOrders(filterStatus?: OrderStatus | 'all') {
       .from('orders')
       .select('*, items:order_items(*, menu_item:menu_items(*))')
       .order('placed_at', { ascending: false })
+      .limit(200) // Cap initial load — realtime subscription keeps the dashboard live
 
     if (filterStatus && filterStatus !== 'all') query = query.eq('status', filterStatus)
 

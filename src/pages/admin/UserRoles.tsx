@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { UserCog, Plus, Trash2, Loader2, Clock } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
+import { sanitizeErrorMessage } from '../../lib/validation'
 
 interface UserRow { id: string; full_name: string | null; role: string; email: string }
 interface InviteRow { email: string; role: string }
@@ -31,7 +32,7 @@ export default function UserRoles() {
     const { data, error } = await supabase.functions.invoke('admin-manage-role', { body: { action: 'set', email, role } })
     setSaving(false)
     if (error || data?.error) {
-      setStatus(`Failed: ${data?.error ?? error?.message}`)
+      setStatus(`Failed: ${sanitizeErrorMessage(data?.error ?? error?.message)}`)
       return
     }
     setStatus(
