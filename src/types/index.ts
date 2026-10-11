@@ -5,7 +5,6 @@ export interface Profile {
   full_name: string | null
   phone: string | null
   role: UserRole
-  email_notifications?: boolean
   vehicle_type: string | null
   vehicle_number: string | null
   vehicle_insurance_expiry: string | null
@@ -65,6 +64,7 @@ export interface Order {
   delivery_stage: 'assigned' | 'picked_up' | 'on_the_way' | 'reached' | 'delivered' | null
   is_cash_deposited: boolean
   placed_at: string
+  guest_token?: string | null
   items?: OrderItem[]
 }
 
@@ -157,4 +157,29 @@ export interface CafeSettings {
 export interface CartLine {
   menu_item: MenuItem
   quantity: number
+}
+
+export interface AuditLog {
+  id: string
+  actor_id: string | null
+  action: string
+  target_table: string
+  target_id: string | null
+  old_values: Record<string, unknown> | null
+  new_values: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface PaymentWebhookEvent {
+  id: string
+  event_id: string
+  event_type: string
+  razorpay_order_id: string | null
+  payment_id: string | null
+  internal_order_id: string | null
+  amount_paise: number | null
+  status: 'processed' | 'ignored' | 'failed'
+  error_message: string | null
+  payload_hash: string | null
+  created_at: string
 }

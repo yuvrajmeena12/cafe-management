@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { Upload, Link as LinkIcon, Loader2 } from 'lucide-react'
 import { uploadImage } from '../lib/upload'
-import { isValidUrl } from '../lib/validation'
+import { isValidImageUrl } from '../lib/validation'
 
 interface Props {
   label: string
@@ -19,12 +19,12 @@ export default function ImageUploadField({ label, value, onChange, folder }: Pro
   async function handleFile(file: File | undefined) {
     if (!file) return
     if (!file.type.startsWith('image/')) {
-      setError('Please choose an image file (JPG, PNG, GIF, WEBP).')
+      setError('Please choose an image file (JPG, PNG, or WEBP).')
       return
     }
-    const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml']
+    const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
     if (!ALLOWED_TYPES.includes(file.type)) {
-      setError(`File type "${file.type}" is not supported. Use JPG, PNG, GIF, or WEBP.`)
+      setError(`File type "${file.type}" is not supported. Use JPG, PNG, or WEBP.`)
       return
     }
     if (file.size > 5 * 1024 * 1024) {
@@ -73,7 +73,7 @@ export default function ImageUploadField({ label, value, onChange, folder }: Pro
           <input
             ref={fileInput}
             type="file"
-            accept="image/*"
+            accept="image/jpeg,image/png,image/webp"
             className="hidden"
             onChange={(e) => handleFile(e.target.files?.[0])}
           />
@@ -91,8 +91,8 @@ export default function ImageUploadField({ label, value, onChange, folder }: Pro
           value={value}
           onChange={(e) => {
             const url = e.target.value
-            if (url && !isValidUrl(url)) {
-              setError('Please enter a valid URL starting with https://')
+            if (url && !isValidImageUrl(url)) {
+              setError('Please enter a valid secure image URL starting with https:// (SVG not allowed)')
             } else {
               setError(null)
             }

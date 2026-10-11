@@ -3,14 +3,13 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
 import { sendEmail, offerBroadcastHtml } from '../_shared/resend.ts'
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
+import { getCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts'
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+  const preflight = handleCorsPreflight(req)
+  if (preflight) return preflight
+
+  const corsHeaders = getCorsHeaders(req)
 
   try {
     const authHeader = req.headers.get('Authorization') ?? ''
@@ -29,6 +28,21 @@ Deno.serve(async (req) => {
 
     const { data: callerProfile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
     if (callerProfile?.role !== 'admin') throw new Error('Only admins can send offer broadcasts')
+
+    // Rate Limiting: maximum 1 broadcast per admin per hour (3600s)
+    // Enforced strictly BEFORE dispatching emails
+    const { data: rl, error: rlErr } = await supabase.rpc('check_rate_limit', {
+      p_key: `admin:${user.id}:offer-broadcast`,
+      p_max_requests: 1,
+      p_window_seconds: 3600,
+    })
+
+    if (rlErr || (rl && !rl.allowed)) {
+      return new Response(
+        JSON.stringify({ error: 'Rate limit exceeded: only 1 offer broadcast allowed per hour.' }),
+        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
 
     const { discountId } = await req.json()
     if (!discountId) throw new Error('discountId is required')

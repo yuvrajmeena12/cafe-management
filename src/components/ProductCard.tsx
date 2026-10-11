@@ -1,24 +1,29 @@
-import { useState } from 'react'
+import { useState, memo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Flame, Plus, Check, Star, Sparkles } from 'lucide-react'
+import { Flame, Plus, Check, Star, Sparkles, UtensilsCrossed } from 'lucide-react'
 import type { MenuItem } from '../types'
 import { useCart } from '../context/CartContext'
+import { optimizeImageUrl } from '../lib/imageOptimizer'
 
 interface Props {
   item: MenuItem
   avgRating?: number | null
   ratingCount?: number
+  isPriority?: boolean
 }
 
-export default function ProductCard({ item, avgRating, ratingCount }: Props) {
+function ProductCard({ item, avgRating, ratingCount, isPriority = false }: Props) {
   const { addItem } = useCart()
   const [justAdded, setJustAdded] = useState(false)
+  const [imgError, setImgError] = useState(false)
 
   function handleAdd() {
     addItem(item)
     setJustAdded(true)
     setTimeout(() => setJustAdded(false), 1400)
   }
+
+  const optimizedUrl = optimizeImageUrl(item.image_url, 500)
 
   return (
     <motion.div
@@ -44,12 +49,22 @@ export default function ProductCard({ item, avgRating, ratingCount }: Props) {
 
       {/* Image container */}
       <div className="relative h-48 overflow-hidden bg-sage-50">
-        <img
-          src={item.image_url}
-          alt={item.name}
-          loading="lazy"
-          className="w-full h-full object-cover group-hover:scale-108 transition-transform duration-500 ease-out"
-        />
+        {!imgError && optimizedUrl ? (
+          <img
+            src={optimizedUrl}
+            alt={item.name}
+            loading={isPriority ? 'eager' : 'lazy'}
+            fetchPriority={isPriority ? 'high' : 'auto'}
+            decoding="async"
+            onError={() => setImgError(true)}
+            className="w-full h-full object-cover group-hover:scale-108 transition-transform duration-500 ease-out"
+          />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center bg-sage-100/70 text-sage-400 gap-1.5">
+            <UtensilsCrossed size={28} className="text-sage-400" />
+            <span className="text-[11px] font-medium text-sage-500">Delicious Dish</span>
+          </div>
+        )}
         <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
         
         {item.is_popular && (
@@ -131,3 +146,5 @@ export default function ProductCard({ item, avgRating, ratingCount }: Props) {
     </motion.div>
   )
 }
+
+export default memo(ProductCard)

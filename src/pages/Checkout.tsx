@@ -11,7 +11,7 @@ import { distanceKm, getDeliveryCharge } from '../lib/distance'
 import AddressMapPicker from '../components/AddressMapPicker'
 import AnimatedPage from '../components/AnimatedPage'
 import AnimatedCounter from '../components/AnimatedCounter'
-import type { OrderType, DeliveryChargeTier, Discount } from '../types'
+import type { OrderType, DeliveryChargeTier, Discount, Order } from '../types'
 
 export default function Checkout() {
   const { lines, subtotal, clearCart } = useCart()
@@ -132,50 +132,37 @@ export default function Checkout() {
     setPlacing(true)
     setError(null)
 
-    const { data: order, error: orderErr } = await supabase
-      .from('orders')
-      .insert({
-        customer_id: profile?.id ?? null,
-        customer_name: customerName.trim(),
-        customer_email: customerEmail.trim(),
-        customer_phone: customerPhone.trim(),
-        status: 'received',
-        order_type: orderType,
-        delivery_address: orderType === 'delivery' ? address : null,
-        delivery_lat: orderType === 'delivery' ? addressLat : null,
-        delivery_lng: orderType === 'delivery' ? addressLng : null,
-        delivery_charge: deliveryCharge,
-        subtotal,
-        discount_amount: discountAmount,
-        tax,
-        total,
-        payment_method: paymentMethod,
-        payment_status: paymentMethod === 'cod' ? 'pending' : 'pending',
-      })
-      .select()
-      .single()
+    const { data: orderData, error: orderErr } = await supabase.rpc('create_checkout_order', {
+      p_customer_name: customerName.trim(),
+      p_customer_email: customerEmail.trim(),
+      p_customer_phone: customerPhone.trim(),
+      p_order_type: orderType,
+      p_delivery_address: orderType === 'delivery' ? address : null,
+      p_delivery_lat: orderType === 'delivery' ? addressLat : null,
+      p_delivery_lng: orderType === 'delivery' ? addressLng : null,
+      p_payment_method: paymentMethod,
+      p_discount_code: discountCode.trim() || null,
+      p_items: lines.map((l) => ({
+        menu_item_id: l.menu_item.id,
+        quantity: l.quantity,
+        notes: null,
+      })),
+    })
 
-    if (orderErr || !order) {
+    if (orderErr || !orderData) {
       setError(sanitizeErrorMessage(orderErr?.message, 'Could not create your order. Please try again.'))
       setPlacing(false)
       return
     }
 
-    await supabase.from('order_items').insert(
-      lines.map((l) => ({
-        order_id: order.id,
-        menu_item_id: l.menu_item.id,
-        quantity: l.quantity,
-        unit_price: l.menu_item.price,
-      }))
-    )
-
-    // Dispatch order confirmation email via edge function
-    supabase.functions.invoke('send-order-email', {
-      body: { orderId: order.id, isNewOrder: true },
-    }).catch(() => {})
+    const order = orderData as unknown as Order
 
     if (paymentMethod === 'cod') {
+      // Dispatch order confirmation email immediately for COD orders
+      supabase.functions.invoke('send-order-email', {
+        body: { orderId: order.id, guestToken: order.guest_token, isNewOrder: true },
+      }).catch(() => {})
+
       clearCart()
       navigate(`/track?order=${order.id}`)
       setPlacing(false)
@@ -183,7 +170,7 @@ export default function Checkout() {
     }
 
     const { data: rzp, error: rzpError } = await supabase.functions.invoke('create-razorpay-order', {
-      body: { orderId: order.id },
+      body: { orderId: order.id, guestToken: order.guest_token },
     })
 
     if (rzpError || !rzp?.razorpayOrderId) {

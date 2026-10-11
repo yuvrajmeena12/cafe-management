@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
-import { getCache, setCache } from './useCache'
+import { getCache, setCache, clearCache } from './useCache'
 import type { MenuItem } from '../types'
+
+const CACHE_TTL_MS = 3 * 60 * 1000
+const MENU_COLUMNS = 'id, name, description, price, image_url, category, calories, tags, is_popular, is_available, prep_time_minutes'
+const inFlightRequests = new Map<string, Promise<MenuItem[] | null>>()
 
 // Built-in fallback items in case Supabase is empty or unseeded, so the menu is ALWAYS discoverable!
 const FALLBACK_MENU: MenuItem[] = [
@@ -121,7 +125,7 @@ const FALLBACK_MENU: MenuItem[] = [
 
 export function useMenu(onlyAvailable = true) {
   const cacheKey = `menu_items_${onlyAvailable}`
-  const cached = getCache<MenuItem[]>(cacheKey, 3 * 60 * 1000)
+  const cached = getCache<MenuItem[]>(cacheKey, CACHE_TTL_MS)
 
   const [items, setItems] = useState<MenuItem[]>(() => {
     if (cached && cached.length > 0) return cached
@@ -132,26 +136,48 @@ export function useMenu(onlyAvailable = true) {
   useEffect(() => {
     let isMounted = true
 
-    async function fetchMenu() {
+    async function fetchMenu(force = false) {
+      if (!force) {
+        const freshCached = getCache<MenuItem[]>(cacheKey, CACHE_TTL_MS)
+        if (freshCached && freshCached.length > 0) {
+          if (isMounted) {
+            setItems(freshCached)
+            setLoading(false)
+          }
+          return
+        }
+      }
+
       try {
-        let query = supabase.from('menu_items').select('*').order('name')
-        if (onlyAvailable) {
-          query = query.or('is_available.eq.true,is_available.is.null')
+        let req = inFlightRequests.get(cacheKey)
+        if (!req) {
+          req = (async () => {
+            let query = supabase.from('menu_items').select(MENU_COLUMNS).order('name')
+            if (onlyAvailable) {
+              query = query.or('is_available.eq.true,is_available.is.null')
+            }
+
+            const { data, error } = await query
+            if (!error && data && data.length > 0) {
+              setCache(cacheKey, data as MenuItem[])
+              return data as MenuItem[]
+            }
+            if (error) {
+              console.warn('Could not fetch from Supabase menu_items (using cached/fallback):', error.message)
+            }
+            return null
+          })()
+
+          inFlightRequests.set(cacheKey, req)
         }
 
-        const { data, error } = await query
-
+        const result = await req
         if (!isMounted) return
 
-        if (!error && data && data.length > 0) {
-          setItems(data as MenuItem[])
-          setCache(cacheKey, data as MenuItem[])
-        } else if (error) {
-          console.warn('Could not fetch from Supabase menu_items (using cached/fallback):', error.message)
-          // Keep existing items or fallback
-          if (!cached || cached.length === 0) {
-            setItems(FALLBACK_MENU)
-          }
+        if (result && result.length > 0) {
+          setItems(result)
+        } else if (!cached || cached.length === 0) {
+          setItems(FALLBACK_MENU)
         }
       } catch (err) {
         console.warn('Menu fetch exception:', err)
@@ -159,18 +185,23 @@ export function useMenu(onlyAvailable = true) {
           setItems(FALLBACK_MENU)
         }
       } finally {
+        inFlightRequests.delete(cacheKey)
         if (isMounted) setLoading(false)
       }
     }
 
-    fetchMenu()
+    // Only issue network fetch on mount if cache is absent or expired
+    if (!cached || cached.length === 0) {
+      fetchMenu()
+    }
 
     let channel: any = null
     try {
       channel = supabase
         .channel('menu-items-changes')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_items' }, () => {
-          fetchMenu()
+          clearCache(cacheKey)
+          fetchMenu(true)
         })
         .subscribe()
     } catch {

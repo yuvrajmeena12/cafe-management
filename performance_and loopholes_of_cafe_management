@@ -1,0 +1,173 @@
+# 🔍 Saffron & Sage — Complete Project Audit Report
+
+## A. Current Architecture
+
+| Layer | Technology | Notes |
+|-------|-----------|-------|
+| Frontend | React 18 + Vite + TypeScript + Tailwind CSS 3 | SPA with client-side routing |
+| Backend | Supabase (PostgreSQL + Auth + Storage + Edge Functions + Realtime) | BaaS — no custom backend server |
+| Auth | Supabase Auth (email/password, Google OAuth, email verification) | Client-side SDK |
+| Payments | Razorpay (order created server-side via edge function) | Secure amount verification |
+| Maps | Leaflet + OpenStreetMap Nominatim | No API key needed |
+| Hosting | Static SPA (Vite build) | No Docker/CI config found |
+
+### Key Insight
+This is a **frontend-only** application backed by Supabase. There is no custom backend server, no Express/Node API, no Docker files, no CI/CD config. Rate limiting and server-side validation must be enforced through **Supabase RLS policies**, **Edge Functions**, and **frontend hardening**.
+
+---
+
+## B. SECURITY ISSUES
+
+| # | File | Problem | Risk | Fix |
+|---|------|---------|------|-----|
+| S1 | `.env` | Live Supabase anon key and Razorpay test key in `.env` | **Medium** — anon key is public by design (RLS protects data), but key rotation recommended if repo was ever shared | Add comment to `.env.example` clarifying these are public keys |
+| S2 | `create-razorpay-order/index.ts` | CORS `Access-Control-Allow-Origin: *` | **Medium** — allows any domain to invoke the edge function | Restrict to application domain |
+| S3 | `admin-manage-role/index.ts` | CORS `Access-Control-Allow-Origin: *` | **Medium** | Restrict to application domain |
+| S4 | `Login.tsx` | No client-side rate limiting on login/signup/forgot forms | **High** — rapid form submission possible | Add submission cooldown and debounce |
+| S5 | `Login.tsx` | Password field has no show/hide toggle | **Low** — UX issue, not security | Add eye toggle |
+| S6 | `ResetPassword.tsx` | No loading state, no submission protection | **Medium** — double submission possible | Add loading state |
+| S7 | `Checkout.tsx` | Order can be placed by unauthenticated users — order row exposes `customer_name`, `customer_email`, `customer_phone` in DB | **Low** — by design (guest checkout), but RLS policy `orders_insert_any` allows any insert | Acceptable for guest checkout |
+| S8 | `upload.ts` | Extension derived from user filename only (`.pop()`) — no MIME validation on server | **Medium** — Supabase Storage handles MIME, but client should also validate | Improve client-side validation |
+| S9 | `index.html` | No CSP meta tag | **Medium** | Add Content-Security-Policy |
+| S10 | `Checkout.tsx` | Discount code validation happens client-side against DB — no server-side check that discount was valid at time of order | **Medium** — user could manipulate discount amount | Validate in edge function |
+| S11 | `Reviews.tsx` | Comment field has no max length — XSS risk if rendered unsanitized | **Low** — React auto-escapes JSX | Add maxLength |
+| S12 | `AuthContext.tsx:47` | Silent `catch {}` on profile upsert — swallows auth errors | **Low** | Log warning |
+
+## C. VALIDATION ISSUES
+
+| # | File | Problem | Fix |
+|---|------|---------|-----|
+| V1 | `Login.tsx` | Signup: `fullName` has no length validation | Add min 2, max 100 |
+| V2 | `Login.tsx` | Password max length not enforced (Supabase has 72-char bcrypt limit) | Add max 72 |
+| V3 | `Login.tsx` | Phone validation only checks 7+ digits — too permissive | Tighten to 10+ digits |
+| V4 | `Checkout.tsx` | `customerName` has no max length | Add maxLength to input |
+| V5 | `Reviews.tsx` | Comment textarea has no maxLength | Add maxLength="1000" |
+| V6 | `Settings.tsx` | Social URLs not validated as URLs | Add URL format validation |
+| V7 | `Staff.tsx` | Salary field allows negative via direct input | Enforce min=0 in validation |
+| V8 | `validation.ts` | Email regex is basic — doesn't catch edge cases | Improve pattern |
+
+## D. AUTHENTICATION ISSUES
+
+| # | Problem | Fix |
+|---|---------|-----|
+| A1 | No client-side submission cooldown on auth forms | Add 2-second cooldown between submissions |
+| A2 | `signUp` swallows profile upsert errors silently | Log warning |
+| A3 | Login form doesn't disable Google OAuth button during loading | Disable during loading |
+| A4 | No password strength indicator on signup | Add visual strength meter |
+
+## E. AUTHORIZATION ISSUES
+
+| # | Problem | Risk | Status |
+|---|---------|------|--------|
+| E1 | RLS policies are well-designed — admin-only for staff/inventory/expenses | ✅ Good | No change needed |
+| E2 | `ProtectedRoute` checks role client-side — server-side RLS is the real guard | ✅ Good | Both layers present |
+| E3 | `orders_admin_update` allows customers and delivery to update orders — customers could change their own order status | **Medium** | Consider restricting customer update scope |
+
+## F. PERFORMANCE ISSUES
+
+| # | File | Problem | Fix |
+|---|------|---------|-----|
+| P1 | `Reviews.tsx` | Loads ALL reviews without pagination | Add pagination |
+| P2 | `useOrders.ts` | Admin orders load ALL orders without pagination | Add limit/pagination |
+| P3 | `admin-manage-role/index.ts` | `listUsers({ perPage: 1000 })` — loads all users on every list action | Cache or paginate |
+| P4 | `Home.tsx` | 14KB component — no lazy loading for below-fold sections | Consider code splitting |
+| P5 | `StaffDashboard.tsx` | 34KB file — largest component | Consider splitting |
+| P6 | `DeliveryDashboard.tsx` | 25KB file | Consider splitting |
+
+## G. DATABASE ISSUES
+
+| # | Problem | Status |
+|---|---------|--------|
+| G1 | Indexes exist for key query patterns (status, customer_id, placed_at, etc.) | ✅ Good |
+| G2 | RLS properly enabled on all tables | ✅ Good |
+| G3 | `handle_new_user()` trigger properly creates profiles | ✅ Good |
+| G4 | No pagination on reviews/orders select queries from frontend | Needs pagination |
+
+## H. CACHING OPPORTUNITIES
+
+| # | Current | Assessment |
+|---|---------|-----------|
+| H1 | `useCache.ts` provides memory + sessionStorage caching | ✅ Good |
+| H2 | Menu items cached for 3 minutes | ✅ Good |
+| H3 | Cafe settings cached for 10 minutes + realtime updates | ✅ Good |
+| H4 | Delivery charge tiers fetched fresh each checkout | Could cache |
+
+## I. UI/UX ISSUES
+
+| # | File | Problem | Fix |
+|---|------|---------|-----|
+| U1 | `Login.tsx` | No password visibility toggle | Add show/hide |
+| U2 | `Login.tsx` | No inline field validation (only on submit) | Add onBlur validation |
+| U3 | `ResetPassword.tsx` | Minimal UI — no loading state, basic styling, no password strength | Enhance |
+| U4 | `Checkout.tsx` | No empty cart guard — can access checkout with 0 items | Add redirect |
+| U5 | All forms | No aria-describedby for error messages | Add accessibility |
+| U6 | `ProtectedRoute.tsx` | Generic "Loading..." text — no skeleton | Add spinner |
+
+## J. DEPENDENCY VULNERABILITIES
+
+> Will run `npm audit` to check.
+
+## K. ERROR-HANDLING ISSUES
+
+| # | File | Problem | Fix |
+|---|------|---------|-----|
+| K1 | `Checkout.tsx:146` | `orderErr?.message` could expose Supabase internals | Use safe message |
+| K2 | Multiple files | `catch (err: any)` with `err.message` — could expose internals | Sanitize error messages |
+| K3 | `Settings.tsx:58` | Test email error exposes Supabase function error directly | Sanitize |
+
+## L. FILE-UPLOAD ISSUES
+
+| # | File | Problem | Fix |
+|---|------|---------|-----|
+| L1 | `ImageUploadField.tsx` | Good: checks `file.type.startsWith('image/')` and 5MB limit | ✅ Good |
+| L2 | `upload.ts` | Uses `crypto.randomUUID()` for filename — safe | ✅ Good |
+| L3 | `ImageUploadField.tsx` | URL mode allows any URL without validation | Add basic URL validation |
+
+## M. SECRETS ISSUES
+
+| # | Problem | Status |
+|---|---------|--------|
+| M1 | `.env` is gitignored | ✅ Good |
+| M2 | `.env.example` has only placeholders | ✅ Good |
+| M3 | Supabase anon key is in `.env` (VITE_ prefix → bundled into frontend) | ✅ By design — anon key is public |
+| M4 | Razorpay test key in `.env` (VITE_ prefix → bundled into frontend) | ✅ By design — public key only |
+| M5 | Server secrets (SERVICE_ROLE_KEY, RAZORPAY_SECRET) only in edge functions via `Deno.env` | ✅ Good |
+
+## N. DOCKER/CI/CD ISSUES
+
+| Status |
+|--------|
+| No Docker files, Jenkinsfile, or CI/CD config found in the project. This is a static SPA deployed likely to Vercel/Netlify or similar. No changes needed. |
+
+---
+
+## Implementation Plan (Ordered by Priority)
+
+### Phase 1: Security Hardening
+1. ✏️ Add submission cooldown to Login/Signup/Forgot forms
+2. ✏️ Add CSP meta tag to `index.html`
+3. ✏️ Sanitize all user-facing error messages
+4. ✏️ Add empty cart guard on Checkout
+
+### Phase 2: Input Validation
+5. ✏️ Strengthen validation.ts (email regex, password rules, name length)
+6. ✏️ Add maxLength to all text inputs/textareas
+7. ✏️ Add inline field validation (onBlur) to Login/Signup
+
+### Phase 3: Auth UX
+8. ✏️ Add password show/hide toggle
+9. ✏️ Add password strength indicator
+10. ✏️ Add loading states to ResetPassword
+11. ✏️ Disable Google OAuth during loading
+
+### Phase 4: Performance
+12. ✏️ Add pagination to Reviews page
+13. ✏️ Add order limit to admin orders
+
+### Phase 5: UI Polish
+14. ✏️ Improve ProtectedRoute loading state
+15. ✏️ Add aria attributes for accessibility
+16. ✏️ URL validation on image URL input
+
+### Phase 6: Dependency Audit
+17. ✏️ Run npm audit and review

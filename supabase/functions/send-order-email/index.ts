@@ -1,25 +1,54 @@
 // Supabase Edge Function: send-order-email
 // Called on order events and status transitions to deliver customer notifications via Resend.
+// SECURITY: Enforces caller authentication and role/ownership/guest authorization.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
 import { sendEmail, statusUpdateHtml, orderConfirmationHtml } from '../_shared/resend.ts'
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
+import { getCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts'
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+  const preflight = handleCorsPreflight(req)
+  if (preflight) return preflight
+
+  const corsHeaders = getCorsHeaders(req)
 
   try {
-    const { orderId, isNewOrder } = await req.json()
+    const authHeader = req.headers.get('Authorization') ?? ''
+    const body = await req.json()
+    const { orderId, guestToken, isNewOrder } = body
     if (!orderId) throw new Error('orderId is required')
+
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+    const isServiceRole = Boolean(serviceRoleKey && authHeader.includes(serviceRoleKey))
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+      serviceRoleKey
     )
+
+    // Inspect caller identity if an authorization header is present
+    let callerUser: { id: string } | null = null
+    let isCallerAdmin = false
+    let isCallerDelivery = false
+
+    if (authHeader && !isServiceRole) {
+      const userClient = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_ANON_KEY')!,
+        { global: { headers: { Authorization: authHeader } } }
+      )
+      const { data: { user } } = await userClient.auth.getUser()
+      if (user) {
+        callerUser = user
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single()
+        if (prof?.role === 'admin') isCallerAdmin = true
+        if (prof?.role === 'delivery' || prof?.role === 'admin') isCallerDelivery = true
+      }
+    }
 
     const { data: order, error } = await supabase
       .from('orders')
@@ -28,6 +57,35 @@ Deno.serve(async (req) => {
       .single()
 
     if (error || !order) throw new Error('Order not found')
+
+    // Authorization verification:
+    // 1. Service role, Admin, or delivery rider caller
+    // 2. Authenticated user who owns the order
+    // 3. Guest customer holding valid guest_token matching order.guest_token
+    const isOwner = callerUser && order.customer_id && callerUser.id === order.customer_id
+    const isAuthorizedGuest = !order.customer_id && guestToken && order.guest_token && guestToken === order.guest_token
+
+    if (!isServiceRole && !isCallerAdmin && !isCallerDelivery && !isOwner && !isAuthorizedGuest) {
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized: Cannot send emails for this order' }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    // Rate Limiting: maximum 3 email dispatches per order per 10 minutes (600s)
+    // Evaluated BEFORE invoking Resend
+    const { data: rl, error: rlErr } = await supabase.rpc('check_rate_limit', {
+      p_key: `order:${orderId}:email`,
+      p_max_requests: 3,
+      p_window_seconds: 600,
+    })
+
+    if (rlErr || (rl && !rl.allowed)) {
+      return new Response(
+        JSON.stringify({ error: 'Too many email requests for this order. Please try again later.' }),
+        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
 
     let emailSent = false
 

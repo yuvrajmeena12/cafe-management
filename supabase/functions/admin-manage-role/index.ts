@@ -7,14 +7,13 @@
 // action: 'list' | 'set' | 'remove_invite'
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.0'
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
+import { getCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts'
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+  const preflight = handleCorsPreflight(req)
+  if (preflight) return preflight
+
+  const corsHeaders = getCorsHeaders(req)
 
   try {
     const authHeader = req.headers.get('Authorization') ?? ''
@@ -29,6 +28,20 @@ Deno.serve(async (req) => {
     const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
     const { data: callerProfile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
     if (callerProfile?.role !== 'admin') throw new Error('Only admins can manage roles')
+
+    // Rate Limiting: maximum 60 requests per admin per 10 minutes (600s)
+    const { data: rl, error: rlErr } = await supabase.rpc('check_rate_limit', {
+      p_key: `admin:${user.id}:manage-role`,
+      p_max_requests: 60,
+      p_window_seconds: 600,
+    })
+
+    if (rlErr || (rl && !rl.allowed)) {
+      return new Response(
+        JSON.stringify({ error: 'Too many admin role management requests. Please try again later.' }),
+        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
 
     const body = await req.json()
     const action = body.action

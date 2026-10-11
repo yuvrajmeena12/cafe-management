@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode, useMemo } from 'react'
+import { createContext, useContext, useState, useEffect, ReactNode, useMemo, useCallback } from 'react'
 import type { CartLine, MenuItem } from '../types'
 
 interface CartContextValue {
@@ -33,7 +33,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
     }
   }, [lines])
 
-  function addItem(item: MenuItem) {
+  const addItem = useCallback((item: MenuItem) => {
     setLines((prev) => {
       const existing = prev.find((l) => l.menu_item.id === item.id)
       if (existing) {
@@ -43,25 +43,28 @@ export function CartProvider({ children }: { children: ReactNode }) {
       }
       return [...prev, { menu_item: item, quantity: 1 }]
     })
-  }
+  }, [])
 
-  function removeItem(itemId: string) {
+  const removeItem = useCallback((itemId: string) => {
     setLines((prev) => prev.filter((l) => l.menu_item.id !== itemId))
-  }
+  }, [])
 
-  function updateQuantity(itemId: string, quantity: number) {
-    if (quantity <= 0) return removeItem(itemId)
+  const updateQuantity = useCallback((itemId: string, quantity: number) => {
+    if (quantity <= 0) {
+      setLines((prev) => prev.filter((l) => l.menu_item.id !== itemId))
+      return
+    }
     setLines((prev) =>
       prev.map((l) => (l.menu_item.id === itemId ? { ...l, quantity } : l))
     )
-  }
+  }, [])
 
-  function clearCart() {
+  const clearCart = useCallback(() => {
     setLines([])
     try {
       localStorage.removeItem(CART_STORAGE_KEY)
     } catch {}
-  }
+  }, [])
 
   const subtotal = useMemo(
     () => lines.reduce((sum, l) => sum + l.menu_item.price * l.quantity, 0),
@@ -69,10 +72,21 @@ export function CartProvider({ children }: { children: ReactNode }) {
   )
   const itemCount = useMemo(() => lines.reduce((sum, l) => sum + l.quantity, 0), [lines])
 
+  const contextValue = useMemo(
+    () => ({
+      lines,
+      addItem,
+      removeItem,
+      updateQuantity,
+      clearCart,
+      subtotal,
+      itemCount,
+    }),
+    [lines, addItem, removeItem, updateQuantity, clearCart, subtotal, itemCount]
+  )
+
   return (
-    <CartContext.Provider
-      value={{ lines, addItem, removeItem, updateQuantity, clearCart, subtotal, itemCount }}
-    >
+    <CartContext.Provider value={contextValue}>
       {children}
     </CartContext.Provider>
   )

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useDeferredValue } from 'react'
 import { Search, ArrowUpDown, X, Sparkles } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useMenu } from '../hooks/useMenu'
@@ -6,6 +6,7 @@ import ProductCard from '../components/ProductCard'
 import AnimatedPage from '../components/AnimatedPage'
 import { SkeletonCard } from '../components/SkeletonLoader'
 import { supabase } from '../lib/supabaseClient'
+import { getCache, setCache } from '../hooks/useCache'
 
 type SortOption = 'default' | 'price_low' | 'price_high' | 'most_rated' | 'low_calories'
 
@@ -20,34 +21,51 @@ const SORT_LABELS: Record<SortOption, string> = {
 export default function Menu() {
   const { items, loading } = useMenu()
   const [search, setSearch] = useState('')
+  const deferredSearch = useDeferredValue(search)
   const [category, setCategory] = useState('All')
   const [sort, setSort] = useState<SortOption>('default')
   const [ratings, setRatings] = useState<Record<string, { avg: number; count: number }>>({})
 
   useEffect(() => {
-    supabase.from('reviews').select('menu_item_id, rating').not('menu_item_id', 'is', null).then(({ data }) => {
-      const grouped: Record<string, number[]> = {}
-      ;(data ?? []).forEach((r) => {
-        if (!r.menu_item_id) return
-        if (!grouped[r.menu_item_id]) grouped[r.menu_item_id] = []
-        grouped[r.menu_item_id].push(r.rating)
+    const cachedRatings = getCache<Record<string, { avg: number; count: number }>>(
+      'menu_ratings_summary',
+      5 * 60 * 1000
+    )
+    if (cachedRatings) {
+      setRatings(cachedRatings)
+      return
+    }
+
+    supabase
+      .from('reviews')
+      .select('menu_item_id, rating')
+      .not('menu_item_id', 'is', null)
+      .then(({ data }) => {
+        const grouped: Record<string, number[]> = {}
+        ;(data ?? []).forEach((r) => {
+          if (!r.menu_item_id) return
+          if (!grouped[r.menu_item_id]) grouped[r.menu_item_id] = []
+          grouped[r.menu_item_id].push(r.rating)
+        })
+        const result: Record<string, { avg: number; count: number }> = {}
+        Object.entries(grouped).forEach(([id, list]) => {
+          result[id] = { avg: list.reduce((s, n) => s + n, 0) / list.length, count: list.length }
+        })
+        setCache('menu_ratings_summary', result)
+        setRatings(result)
       })
-      const result: Record<string, { avg: number; count: number }> = {}
-      Object.entries(grouped).forEach(([id, list]) => {
-        result[id] = { avg: list.reduce((s, n) => s + n, 0) / list.length, count: list.length }
-      })
-      setRatings(result)
-    })
   }, [])
 
   const categories = useMemo(() => ['All', ...new Set(items.map((i) => i.category))], [items])
 
   const filtered = useMemo(() => {
+    const term = deferredSearch.toLowerCase()
     let list = items.filter((i) => {
       const matchesSearch =
-        i.name.toLowerCase().includes(search.toLowerCase()) ||
-        i.description.toLowerCase().includes(search.toLowerCase()) ||
-        i.tags?.some((t) => t.toLowerCase().includes(search.toLowerCase()))
+        !term ||
+        i.name.toLowerCase().includes(term) ||
+        i.description.toLowerCase().includes(term) ||
+        i.tags?.some((t) => t.toLowerCase().includes(term))
       const matchesCategory = category === 'All' || i.category === category
       return matchesSearch && matchesCategory
     })
@@ -58,7 +76,7 @@ export default function Menu() {
     else if (sort === 'low_calories') list = [...list].sort((a, b) => (a.calories ?? 9999) - (b.calories ?? 9999))
 
     return list
-  }, [items, search, category, sort, ratings])
+  }, [items, deferredSearch, category, sort, ratings])
 
   return (
     <AnimatedPage className="max-w-7xl mx-auto px-6 py-12">
@@ -163,12 +181,13 @@ export default function Menu() {
           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6"
         >
           <AnimatePresence>
-            {filtered.map((item) => (
+            {filtered.map((item, index) => (
               <ProductCard
                 key={item.id}
                 item={item}
                 avgRating={ratings[item.id]?.avg ?? null}
                 ratingCount={ratings[item.id]?.count}
+                isPriority={index < 3}
               />
             ))}
           </AnimatePresence>

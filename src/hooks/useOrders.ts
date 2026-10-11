@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import type { Order, OrderStatus } from '../types'
 
@@ -7,6 +7,11 @@ import type { Order, OrderStatus } from '../types'
 export function useOrders(filterStatus?: OrderStatus | 'all') {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
+  const ordersRef = useRef<Order[]>([])
+
+  useEffect(() => {
+    ordersRef.current = orders
+  }, [orders])
 
   async function fetchOrders() {
     let query = supabase
@@ -22,12 +27,97 @@ export function useOrders(filterStatus?: OrderStatus | 'all') {
     setLoading(false)
   }
 
+  async function fetchSingleOrder(orderId: string) {
+    try {
+      const { data } = await supabase
+        .from('orders')
+        .select('*, items:order_items(*, menu_item:menu_items(*))')
+        .eq('id', orderId)
+        .single()
+
+      if (!data) return
+
+      const hydrated = data as Order
+
+      setOrders((prev) => {
+        // If filterStatus is active and the order does not match, filter it out
+        if (filterStatus && filterStatus !== 'all' && hydrated.status !== filterStatus) {
+          return prev.filter((o) => o.id !== orderId)
+        }
+
+        const exists = prev.some((o) => o.id === orderId)
+        let next: Order[]
+        if (exists) {
+          next = prev.map((o) => (o.id === orderId ? hydrated : o))
+        } else {
+          next = [hydrated, ...prev]
+        }
+
+        next.sort((a, b) => new Date(b.placed_at).getTime() - new Date(a.placed_at).getTime())
+        return next.length > 200 ? next.slice(0, 200) : next
+      })
+    } catch {
+      fetchOrders()
+    }
+  }
+
   useEffect(() => {
     fetchOrders()
 
     const channel = supabase
       .channel('orders-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchOrders)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+        const eventType = payload.eventType
+        const newRow = payload.new as Partial<Order> | undefined
+        const oldRow = payload.old as { id?: string } | undefined
+
+        if (eventType === 'UPDATE' && newRow && newRow.id) {
+          const currentOrders = ordersRef.current
+          const existing = currentOrders.find((o) => o.id === newRow.id)
+
+          if (!existing) {
+            // Scenario C: Order enters the current filter (was not present locally)
+            if (!filterStatus || filterStatus === 'all' || newRow.status === filterStatus) {
+              fetchSingleOrder(newRow.id)
+            }
+            return
+          }
+
+          // Scenario B: Existing order leaves the current filter
+          if (filterStatus && filterStatus !== 'all' && newRow.status && newRow.status !== filterStatus) {
+            setOrders((prev) => prev.filter((o) => o.id !== newRow.id))
+            return
+          }
+
+          // Scenario A: Existing order remains inside the current filter
+          // Update in place preserving nested items
+          const updated: Order = {
+            ...existing,
+            ...(newRow as Order),
+            items: existing.items, // Crucial: preserve nested items/menu information
+          }
+
+          setOrders((prev) => prev.map((o) => (o.id === newRow.id ? updated : o)))
+          return
+        }
+
+        if (eventType === 'DELETE' && oldRow && oldRow.id) {
+          // Scenario E: Remove only the deleted order locally
+          setOrders((prev) => prev.filter((o) => o.id !== oldRow.id))
+          return
+        }
+
+        if (eventType === 'INSERT' && newRow && newRow.id) {
+          // Scenario D: Fetch only the new order and hydrate nested items
+          if (!filterStatus || filterStatus === 'all' || newRow.status === filterStatus) {
+            fetchSingleOrder(newRow.id)
+          }
+          return
+        }
+
+        // Scenario F: Complex or unknown event fallback
+        fetchOrders()
+      })
       .subscribe()
 
     return () => {

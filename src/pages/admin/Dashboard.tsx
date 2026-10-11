@@ -30,28 +30,71 @@ export default function Dashboard() {
 
   useEffect(() => {
     async function load() {
-      const [{ data: paidOrders }, { data: expenses }, { data: allOrders }, { data: inventory }] = await Promise.all([
-        supabase.from('orders').select('total').eq('payment_status', 'paid'),
-        supabase.from('expenses').select('amount'),
-        supabase.from('orders').select('id, status, placed_at'),
-        supabase.from('inventory_items').select('id, quantity, min_level'),
-      ])
+      // Explicit local day boundaries for [start_of_today, start_of_tomorrow)
+      const startOfToday = new Date()
+      startOfToday.setHours(0, 0, 0, 0)
+      const startOfTomorrow = new Date(startOfToday)
+      startOfTomorrow.setDate(startOfTomorrow.getDate() + 1)
 
-      const revenue = (paidOrders ?? []).reduce((s, o) => s + Number(o.total), 0)
-      const expenseTotal = (expenses ?? []).reduce((s, e) => s + Number(e.amount), 0)
-      const today = new Date().toDateString()
-      const todaysOrders = (allOrders ?? []).filter((o) => new Date(o.placed_at).toDateString() === today).length
-      const pendingOrders = (allOrders ?? []).filter((o) => !['delivered', 'cancelled'].includes(o.status)).length
-      const lowStock = (inventory ?? []).filter((i) => Number(i.quantity) < Number(i.min_level)).length
+      // Fetch aggregated metrics via get_admin_dashboard_stats RPC
+      const { data: rpcData, error: rpcError } = await supabase.rpc('get_admin_dashboard_stats', {
+        today_start: startOfToday.toISOString(),
+        today_end: startOfTomorrow.toISOString(),
+      }).single()
 
-      setStats({
-        revenue,
-        expenses: expenseTotal,
-        totalOrders: (allOrders ?? []).length,
-        pendingOrders,
-        lowStock,
-        todaysOrders,
-      })
+      interface DashboardRpcResult {
+        revenue?: number | string | null
+        expenses?: number | string | null
+        total_orders?: number | string | null
+        pending_orders?: number | string | null
+        low_stock?: number | string | null
+        todays_orders?: number | string | null
+      }
+
+      if (!rpcError && rpcData) {
+        const d = rpcData as DashboardRpcResult
+        setStats({
+          revenue: Number(d.revenue ?? 0),
+          expenses: Number(d.expenses ?? 0),
+          totalOrders: Number(d.total_orders ?? 0),
+          pendingOrders: Number(d.pending_orders ?? 0),
+          lowStock: Number(d.low_stock ?? 0),
+          todaysOrders: Number(d.todays_orders ?? 0),
+        })
+      } else {
+        if (rpcError) {
+          console.warn('Dashboard RPC failed, using query fallback:', rpcError.message)
+        }
+        // Fallback for environments where migration has not yet been applied
+        try {
+          const [{ data: paidOrders }, { data: expenses }, { data: allOrders }, { data: inventory }] = await Promise.all([
+            supabase.from('orders').select('total').eq('payment_status', 'paid'),
+            supabase.from('expenses').select('amount'),
+            supabase.from('orders').select('id, status, placed_at'),
+            supabase.from('inventory_items').select('id, quantity, min_level'),
+          ])
+
+          const revenue = (paidOrders ?? []).reduce((s, o) => s + Number(o.total), 0)
+          const expenseTotal = (expenses ?? []).reduce((s, e) => s + Number(e.amount), 0)
+          const todaysOrders = (allOrders ?? []).filter((o) => {
+            const placed = new Date(o.placed_at)
+            return placed >= startOfToday && placed < startOfTomorrow
+          }).length
+          const pendingOrders = (allOrders ?? []).filter((o) => !['delivered', 'cancelled'].includes(o.status)).length
+          const lowStock = (inventory ?? []).filter((i) => Number(i.quantity) < Number(i.min_level)).length
+
+          setStats({
+            revenue,
+            expenses: expenseTotal,
+            totalOrders: (allOrders ?? []).length,
+            pendingOrders,
+            lowStock,
+            todaysOrders,
+          })
+        } catch (fallbackErr) {
+          console.error('Dashboard fallback query error:', fallbackErr)
+        }
+      }
 
       const { data: menuItems } = await supabase.from('menu_items').select('*')
       const counts = await fetchItemOrderCounts()

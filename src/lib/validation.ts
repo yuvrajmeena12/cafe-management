@@ -57,11 +57,52 @@ export function getPasswordStrength(password: string): {
   return { score, label: 'Excellent', color: 'bg-emerald-500' }
 }
 
-/** Validates a URL string (must be http or https). */
+/** Validates a general URL string (must be http or https). */
 export function isValidUrl(url: string): boolean {
   try {
     const parsed = new URL(url)
     return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Validates image URLs for security and browser compatibility:
+ * - Requires https: protocol for absolute URLs (rejects http:, javascript:, data:, etc.)
+ * - Allows relative paths starting with '/'
+ * - Rejects SVG URLs (.svg) to prevent SVG-based script execution / XSS vectors
+ * - Preserves CDNs (Pexels, Unsplash, Supabase Storage) and standard web images
+ */
+export function isValidImageUrl(url: string): boolean {
+  if (!url || typeof url !== 'string') return false
+  const trimmed = url.trim()
+  if (!trimmed) return false
+
+  // Reject dangerous pseudo-protocols explicitly
+  if (/^(javascript|data|vbscript|file):/i.test(trimmed)) {
+    return false
+  }
+
+  // Allow relative paths starting with / (e.g. /assets/hero.jpg)
+  if (trimmed.startsWith('/')) {
+    // Reject relative SVGs
+    if (/\.svg([?#].*)?$/i.test(trimmed)) return false
+    return true
+  }
+
+  try {
+    const parsed = new URL(trimmed)
+    // Strictly require https: (reject http:, ftp:, etc.)
+    if (parsed.protocol !== 'https:') return false
+
+    // Reject SVG by pathname or search parameters
+    const pathname = parsed.pathname.toLowerCase()
+    if (pathname.endsWith('.svg') || /\.svg([?#].*)?$/i.test(trimmed)) {
+      return false
+    }
+
+    return true
   } catch {
     return false
   }
