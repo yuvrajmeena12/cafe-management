@@ -67,14 +67,19 @@ export default function Dashboard() {
         }
         // Fallback for environments where migration has not yet been applied
         try {
-          const [{ data: paidOrders }, { data: expenses }, { data: allOrders }, { data: inventory }] = await Promise.all([
-            supabase.from('orders').select('total').eq('payment_status', 'paid'),
+          const [{ data: revenueOrders }, { data: expenses }, { data: allOrders }, { data: inventory }] = await Promise.all([
+            supabase.from('orders').select('total, payment_method, payment_status, status'),
             supabase.from('expenses').select('amount'),
             supabase.from('orders').select('id, status, placed_at'),
             supabase.from('inventory_items').select('id, quantity, min_level'),
           ])
 
-          const revenue = (paidOrders ?? []).reduce((s, o) => s + Number(o.total), 0)
+          const revenue = (revenueOrders ?? [])
+            .filter((o) =>
+              (o.payment_method === 'online' && o.payment_status === 'paid') ||
+              (o.payment_method === 'cod' && o.status === 'delivered' && o.payment_status === 'paid')
+            )
+            .reduce((s, o) => s + Number(o.total), 0)
           const expenseTotal = (expenses ?? []).reduce((s, e) => s + Number(e.amount), 0)
           const todaysOrders = (allOrders ?? []).filter((o) => {
             const placed = new Date(o.placed_at)
@@ -108,6 +113,17 @@ export default function Dashboard() {
       setPredictions(ranked)
     }
     load()
+
+    const channel = supabase
+      .channel('admin-dashboard-orders-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+        load()
+      })
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
   }, [])
 
   const netProfit = stats.revenue - stats.expenses

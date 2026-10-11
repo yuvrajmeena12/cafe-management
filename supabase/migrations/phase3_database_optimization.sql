@@ -67,7 +67,12 @@ BEGIN
 
   RETURN QUERY
   SELECT
-    COALESCE((SELECT SUM(o.total) FROM public.orders o WHERE o.payment_status = 'paid'), 0)::numeric AS revenue,
+    COALESCE((
+      SELECT SUM(o.total)
+      FROM public.orders o
+      WHERE (o.payment_method = 'online' AND o.payment_status = 'paid')
+         OR (o.payment_method = 'cod' AND o.status = 'delivered' AND o.payment_status = 'paid')
+    ), 0)::numeric AS revenue,
     COALESCE((SELECT SUM(e.amount) FROM public.expenses e), 0)::numeric AS expenses,
     COALESCE((SELECT COUNT(*) FROM public.orders), 0)::bigint AS total_orders,
     COALESCE((SELECT COUNT(*) FROM public.orders o WHERE o.status NOT IN ('delivered', 'cancelled')), 0)::bigint AS pending_orders,

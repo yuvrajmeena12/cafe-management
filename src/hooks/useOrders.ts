@@ -4,7 +4,7 @@ import type { Order, OrderStatus } from '../types'
 
 /** Realtime subscription so the Kitchen Dashboard / customer tracking page
  *  update instantly without a manual refresh. */
-export function useOrders(filterStatus?: OrderStatus | 'all') {
+export function useOrders(filterStatus?: OrderStatus | 'pending' | 'all') {
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const ordersRef = useRef<Order[]>([])
@@ -13,6 +13,12 @@ export function useOrders(filterStatus?: OrderStatus | 'all') {
     ordersRef.current = orders
   }, [orders])
 
+  const isMatchingFilter = (status?: string) => {
+    if (!filterStatus || filterStatus === 'all') return true
+    if (filterStatus === 'pending') return !['delivered', 'cancelled'].includes(status || '')
+    return status === filterStatus
+  }
+
   async function fetchOrders() {
     let query = supabase
       .from('orders')
@@ -20,7 +26,13 @@ export function useOrders(filterStatus?: OrderStatus | 'all') {
       .order('placed_at', { ascending: false })
       .limit(200) // Cap initial load — realtime subscription keeps the dashboard live
 
-    if (filterStatus && filterStatus !== 'all') query = query.eq('status', filterStatus)
+    if (filterStatus && filterStatus !== 'all') {
+      if (filterStatus === 'pending') {
+        query = query.not('status', 'in', '("delivered","cancelled")')
+      } else {
+        query = query.eq('status', filterStatus)
+      }
+    }
 
     const { data } = await query
     setOrders((data as Order[]) ?? [])
@@ -41,7 +53,7 @@ export function useOrders(filterStatus?: OrderStatus | 'all') {
 
       setOrders((prev) => {
         // If filterStatus is active and the order does not match, filter it out
-        if (filterStatus && filterStatus !== 'all' && hydrated.status !== filterStatus) {
+        if (filterStatus && filterStatus !== 'all' && !isMatchingFilter(hydrated.status)) {
           return prev.filter((o) => o.id !== orderId)
         }
 
@@ -77,14 +89,14 @@ export function useOrders(filterStatus?: OrderStatus | 'all') {
 
           if (!existing) {
             // Scenario C: Order enters the current filter (was not present locally)
-            if (!filterStatus || filterStatus === 'all' || newRow.status === filterStatus) {
+            if (isMatchingFilter(newRow.status)) {
               fetchSingleOrder(newRow.id)
             }
             return
           }
 
           // Scenario B: Existing order leaves the current filter
-          if (filterStatus && filterStatus !== 'all' && newRow.status && newRow.status !== filterStatus) {
+          if (!isMatchingFilter(newRow.status)) {
             setOrders((prev) => prev.filter((o) => o.id !== newRow.id))
             return
           }
@@ -109,7 +121,7 @@ export function useOrders(filterStatus?: OrderStatus | 'all') {
 
         if (eventType === 'INSERT' && newRow && newRow.id) {
           // Scenario D: Fetch only the new order and hydrate nested items
-          if (!filterStatus || filterStatus === 'all' || newRow.status === filterStatus) {
+          if (isMatchingFilter(newRow.status)) {
             fetchSingleOrder(newRow.id)
           }
           return
@@ -126,11 +138,59 @@ export function useOrders(filterStatus?: OrderStatus | 'all') {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterStatus])
 
-  async function updateStatus(orderId: string, status: OrderStatus) {
-    await supabase.from('orders').update({ status }).eq('id', orderId)
-    // Fire-and-forget — don't block the UI on email sending, and don't
-    // fail the status change if the email happens to fail.
-    supabase.functions.invoke('send-order-email', { body: { orderId } }).catch(() => {})
+  async function updateStatus(
+    orderId: string,
+    status: OrderStatus,
+    targetOrder?: Partial<Order>
+  ): Promise<boolean> {
+    const currentOrder = targetOrder || ordersRef.current.find((o) => o.id === orderId)
+    const nowIso = new Date().toISOString()
+
+    const updates: Record<string, any> = {
+      status,
+      updated_at: nowIso,
+    }
+
+    if (status === 'delivered') {
+      updates.delivered_at = nowIso
+      if (currentOrder?.order_type === 'delivery') {
+        updates.delivery_stage = 'delivered'
+      }
+      // For COD orders, cash collection is confirmed upon successful delivery
+      if (currentOrder?.payment_method === 'cod') {
+        updates.payment_status = 'paid'
+        updates.is_cash_deposited = true
+      }
+    }
+
+    // Optimistically update local state so delivered orders leave the pending list immediately
+    setOrders((prev) => {
+      if (filterStatus && filterStatus !== 'all' && !isMatchingFilter(status)) {
+        return prev.filter((o) => o.id !== orderId)
+      }
+      return prev.map((o) => (o.id === orderId ? { ...o, ...updates } : o))
+    })
+
+    try {
+      const { error } = await supabase.from('orders').update(updates).eq('id', orderId)
+      if (error) {
+        console.error('Failed to update order status:', error)
+        await fetchOrders()
+        return false
+      }
+
+      // Invalidate and refresh query to guarantee consistency
+      await fetchOrders()
+
+      // Fire-and-forget — don't block the UI on email sending, and don't
+      // fail the status change if the email happens to fail.
+      supabase.functions.invoke('send-order-email', { body: { orderId } }).catch(() => {})
+      return true
+    } catch (err) {
+      console.error('Error updating order status in Supabase:', err)
+      await fetchOrders()
+      return false
+    }
   }
 
   return { orders, loading, updateStatus, refetch: fetchOrders }
