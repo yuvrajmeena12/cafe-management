@@ -101,16 +101,20 @@ export default function Dashboard() {
         }
       }
 
-      const { data: menuItems } = await supabase.from('menu_items').select('*')
-      const counts = await fetchItemOrderCounts()
-      const ranked = (menuItems ?? [])
-        .map((item) => {
-          const c = counts[item.id] ?? { thisWeek: 0, lastWeek: 0 }
-          return { item, ...predictNextWeek(c.thisWeek, c.lastWeek) }
-        })
-        .sort((a, b) => b.predictedOrders - a.predictedOrders)
-        .slice(0, 4)
-      setPredictions(ranked)
+      try {
+        const { data: menuItems } = await supabase.from('menu_items').select('*')
+        const counts = await fetchItemOrderCounts()
+        const ranked = (menuItems ?? [])
+          .map((item) => {
+            const c = counts[item.id] ?? { thisWeek: 0, lastWeek: 0 }
+            return { item, ...predictNextWeek(c.thisWeek, c.lastWeek) }
+          })
+          .sort((a, b) => b.predictedOrders - a.predictedOrders)
+          .slice(0, 4)
+        setPredictions(ranked)
+      } catch (err) {
+        console.warn('Dashboard predictions loading notice:', err)
+      }
     }
     load()
 

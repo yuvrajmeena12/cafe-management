@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Mail, Lock, User, Phone, CheckCircle, AlertCircle, ArrowRight,
@@ -16,8 +16,16 @@ import AnimatedPage from '../components/AnimatedPage'
 const SUBMIT_COOLDOWN_MS = 2000
 
 export default function Login() {
-  const { signIn, signUp, resendVerificationEmail } = useAuth()
+  const { signIn, signUp, resendVerificationEmail, isAdmin } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
+
+  useEffect(() => {
+    if (isAdmin) {
+      const destination = (location.state as any)?.from?.pathname || '/admin'
+      navigate(destination, { replace: true })
+    }
+  }, [isAdmin, navigate, location.state])
 
   // ── Core state ─────────────────────────────────────────────
   const [mode, setMode] = useState<'login' | 'signup' | 'forgot' | 'verify_notice'>('login')
@@ -159,7 +167,8 @@ export default function Login() {
             setMode('verify_notice')
           }
         } else {
-          navigate('/')
+          const destination = (location.state as any)?.from?.pathname || (result.role === 'admin' ? '/admin' : '/')
+          navigate(destination, { replace: true })
         }
       }
     } catch (err: any) {

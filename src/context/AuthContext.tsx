@@ -1,14 +1,19 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabaseClient'
 import { sanitizeErrorMessage } from '../lib/validation'
 import type { Profile } from '../types'
 
 interface AuthContextValue {
   profile: Profile | null
+  session: Session | null
+  user: User | null
   email: string | null
   loading: boolean
   isEmailVerified: boolean
-  signIn: (email: string, password: string) => Promise<{ error: string | null; needsVerification?: boolean }>
+  roleError: string | null
+  retryAuth: () => Promise<void>
+  signIn: (email: string, password: string) => Promise<{ error: string | null; needsVerification?: boolean; role?: string }>
   signUp: (email: string, password: string, fullName: string, phone: string) => Promise<{ error: string | null; needsVerification?: boolean }>
   resendVerificationEmail: (email: string) => Promise<{ error: string | null }>
   signOut: () => Promise<void>
@@ -18,23 +23,40 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const [session, setSession] = useState<Session | null>(null)
+  const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [email, setEmail] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [isEmailVerified, setIsEmailVerified] = useState(false)
+  const [roleError, setRoleError] = useState<string | null>(null)
 
-  async function loadProfile(userId: string, userEmail: string | undefined, emailConfirmedAt?: string | null) {
+  async function loadProfile(userId: string, userEmail: string | undefined, emailConfirmedAt?: string | null): Promise<Profile | null> {
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .maybeSingle()
 
+      if (error) {
+        console.error('Error loading profile:', error)
+        setRoleError(error.message || 'Failed to verify account permissions.')
+        return null
+      }
+
       if (data) {
-        setProfile(data as Profile)
+        const userProfile = data as Profile
+        setProfile(userProfile)
+        setEmail(userEmail ?? null)
+        setIsEmailVerified(!!emailConfirmedAt)
+        setRoleError(null)
+        try {
+          sessionStorage.setItem('saffron_sage_auth_profile', JSON.stringify(userProfile))
+        } catch {}
+        return userProfile
       } else {
-        // Fallback: create default profile row if it doesn't exist
+        // Fallback: create default profile row ONLY if DB confirmed 0 rows (no query error)
         const fallbackProfile: Profile = {
           id: userId,
           full_name: userEmail ? userEmail.split('@')[0] : 'Customer',
@@ -45,58 +67,118 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           vehicle_insurance_expiry: null,
         }
         try {
-          await supabase.from('profiles').upsert(fallbackProfile)
+          await supabase.from('profiles').upsert(fallbackProfile, { onConflict: 'id', ignoreDuplicates: true })
         } catch (upsertErr) {
           console.warn('AuthContext: fallback profile upsert failed —', upsertErr)
         }
         setProfile(fallbackProfile)
+        setEmail(userEmail ?? null)
+        setIsEmailVerified(!!emailConfirmedAt)
+        setRoleError(null)
+        return fallbackProfile
       }
-      setEmail(userEmail ?? null)
-      setIsEmailVerified(!!emailConfirmedAt)
-    } catch (err) {
-      console.error('Error loading profile:', err)
-      if (userEmail) {
-        setProfile({
-          id: userId,
-          full_name: userEmail.split('@')[0],
-          phone: null,
-          role: 'customer',
-          vehicle_type: null,
-          vehicle_number: null,
-          vehicle_insurance_expiry: null,
-        })
-        setEmail(userEmail)
+    } catch (err: any) {
+      console.error('Exception loading profile:', err)
+      setRoleError(err?.message || 'Network error while verifying account permissions.')
+      return null
+    }
+  }
+
+  async function retryAuth(): Promise<void> {
+    setLoading(true)
+    setRoleError(null)
+    try {
+      const { data: { session: activeSession }, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError) {
+        setRoleError(sessionError.message)
+        return
       }
+      if (activeSession?.user) {
+        setSession(activeSession)
+        setUser(activeSession.user)
+        setEmail(activeSession.user.email ?? null)
+        await loadProfile(activeSession.user.id, activeSession.user.email, activeSession.user.email_confirmed_at)
+      } else {
+        setSession(null)
+        setUser(null)
+        setProfile(null)
+        setEmail(null)
+      }
+    } catch (err: any) {
+      setRoleError(err?.message || 'Authentication check failed.')
+    } finally {
+      setLoading(false)
     }
   }
 
   useEffect(() => {
     let mounted = true
+    let initialized = false
 
-    supabase.auth
-      .getSession()
-      .then(({ data: { session } }) => {
+    async function init() {
+      try {
+        const { data: { session: initialSession }, error: sessionError } = await supabase.auth.getSession()
         if (!mounted) return
-        if (session?.user) {
-          loadProfile(session.user.id, session.user.email, session.user.email_confirmed_at)
-        }
-        setLoading(false)
-      })
-      .catch((err) => {
-        console.error('Failed to get session:', err)
-        if (mounted) setLoading(false)
-      })
 
-    const { data: listener } = supabase.auth.onAuthStateChange(async (_event, session) => {
+        if (sessionError) {
+          console.error('Failed to get session:', sessionError)
+          setRoleError(sessionError.message)
+        } else if (initialSession?.user) {
+          setSession(initialSession)
+          setUser(initialSession.user)
+          setEmail(initialSession.user.email ?? null)
+          await loadProfile(initialSession.user.id, initialSession.user.email, initialSession.user.email_confirmed_at)
+        } else {
+          setProfile(null)
+          setSession(null)
+          setUser(null)
+          setEmail(null)
+          setIsEmailVerified(false)
+        }
+      } catch (err: any) {
+        if (!mounted) return
+        console.error('Session initialization error:', err)
+        setRoleError(err?.message || 'Failed to initialize session.')
+      } finally {
+        if (mounted) {
+          initialized = true
+          setLoading(false)
+        }
+      }
+    }
+
+    init()
+
+    const { data: listener } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       if (!mounted) return
-      if (session?.user) {
-        await loadProfile(session.user.id, session.user.email, session.user.email_confirmed_at)
-      } else {
+
+      // Avoid race condition: let init() finish the initial getSession & profile load
+      if (event === 'INITIAL_SESSION' && !initialized) {
+        return
+      }
+
+      if (event === 'SIGNED_OUT' || !newSession?.user) {
         setProfile(null)
+        setSession(null)
+        setUser(null)
         setEmail(null)
         setIsEmailVerified(false)
+        setRoleError(null)
+        try {
+          sessionStorage.removeItem('saffron_sage_auth_profile')
+        } catch {}
+        if (mounted) setLoading(false)
+        return
       }
-      setLoading(false)
+
+      setSession(newSession)
+      setUser(newSession.user)
+      setEmail(newSession.user.email ?? null)
+
+      if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || (event === 'INITIAL_SESSION' && initialized)) {
+        await loadProfile(newSession.user.id, newSession.user.email, newSession.user.email_confirmed_at)
+      }
+      if (mounted) setLoading(false)
     })
 
     return () => {
@@ -107,6 +189,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function signIn(emailInput: string, passwordInput: string) {
     try {
+      setRoleError(null)
       const cleanEmail = emailInput.trim().toLowerCase()
       const { data, error } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
@@ -127,8 +210,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { error: sanitizeErrorMessage(msg, 'Login failed. Please try again.') }
       }
 
+      let loadedProfile: Profile | null = null
       if (data.session && data.user) {
-        await loadProfile(data.user.id, data.user.email, data.user.email_confirmed_at)
+        setSession(data.session)
+        setUser(data.user)
+        setEmail(data.user.email ?? null)
+        loadedProfile = await loadProfile(data.user.id, data.user.email, data.user.email_confirmed_at)
       } else if (data.user && !data.user.email_confirmed_at) {
         return {
           error: 'Please verify your email address to continue.',
@@ -136,7 +223,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      return { error: null }
+      return { error: null, role: loadedProfile?.role }
     } catch (err: any) {
       console.error('signIn exception:', err)
       return { error: sanitizeErrorMessage(err?.message, 'Login request failed. Please check your internet connection.') }
@@ -162,12 +249,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (data.user) {
         try {
-          await supabase.from('profiles').upsert({
-            id: data.user.id,
-            full_name: fullName.trim(),
-            phone: phone.trim(),
-            role: 'customer',
-          })
+          await supabase.from('profiles').upsert(
+            {
+              id: data.user.id,
+              full_name: fullName.trim(),
+              phone: phone.trim(),
+              role: 'customer',
+            },
+            { onConflict: 'id', ignoreDuplicates: true }
+          )
         } catch (upsertErr) {
           console.warn('AuthContext: signup profile upsert failed —', upsertErr)
         }
@@ -204,9 +294,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error('Sign out error:', err)
     } finally {
+      setSession(null)
+      setUser(null)
       setProfile(null)
       setEmail(null)
       setIsEmailVerified(false)
+      setRoleError(null)
+      try {
+        sessionStorage.removeItem('saffron_sage_auth_profile')
+      } catch {}
     }
   }
 
@@ -216,9 +312,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         profile,
+        session,
+        user,
         email,
         loading,
         isEmailVerified,
+        roleError,
+        retryAuth,
         signIn,
         signUp,
         resendVerificationEmail,
